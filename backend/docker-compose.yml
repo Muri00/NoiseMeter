@@ -1,0 +1,16 @@
+# MariaDB за разработка: docker compose up -d
+services:
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      # Паролата се задава в .env (не се качва в Git), виж .env.example
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Задайте MARIADB_ROOT_PASSWORD в .env}
+      MARIADB_DATABASE: NoiseMeterDB
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+volumes:
+  mariadb_data:
