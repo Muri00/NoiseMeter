@@ -20,8 +20,11 @@ TAU_IMPULSE_RISE = 0.035
 TAU_IMPULSE_DECAY = 1.5  # ANSI S1.4: детектор на пик с експоненциален спад
 
 
-def _analog_zpk(weighting: str):
-    w1, w2, w3, w4 = (2 * np.pi * f for f in (F1, F2, F3, F4))
+IEC_POLES = (F1, F2, F3, F4)
+
+
+def _analog_zpk(weighting: str, poles=IEC_POLES):
+    w1, w2, w3, w4 = (2 * np.pi * f for f in poles)
     if weighting == "A":
         return [0.0] * 4, [-w1, -w1, -w2, -w3, -w4, -w4]
     if weighting == "C":
@@ -29,11 +32,14 @@ def _analog_zpk(weighting: str):
     raise ValueError(f"Непознат честотен филтър: {weighting}")
 
 
-def design_weighting(weighting: str, fs: float) -> np.ndarray | None:
-    """Връща SOS коефициенти на цифровия филтър или None за Z (без тегловност)."""
+def design_weighting(weighting: str, fs: float, poles=IEC_POLES) -> np.ndarray | None:
+    """Връща SOS коефициенти на цифровия филтър или None за Z (без тегловност).
+
+    poles: полюсните честоти f1..f4 от избрания стандарт.
+    """
     if weighting == "Z":
         return None
-    z, p = _analog_zpk(weighting)
+    z, p = _analog_zpk(weighting, poles)
     # Нормиране на аналоговия прототип към 0 dB при 1 kHz.
     _, h = signal.freqs_zpk(z, p, 1.0, worN=[2 * np.pi * 1000.0])
     k = 1.0 / abs(h[0])
@@ -110,9 +116,9 @@ class ExponentialAverager:
 class ImpulseAverager:
     """Времеви филтър I: нарастване с 35 ms и детектор на пик със спад 1.5 s (ANSI S1.4)."""
 
-    def __init__(self, fs: float):
-        self.rise = ExponentialAverager(TAU_IMPULSE_RISE, fs)
-        self.decay = np.exp(-1.0 / (TAU_IMPULSE_DECAY * fs))
+    def __init__(self, fs: float, rise: float = TAU_IMPULSE_RISE, decay: float = TAU_IMPULSE_DECAY):
+        self.rise = ExponentialAverager(rise, fs)
+        self.decay = np.exp(-1.0 / (decay * fs))
         self.peak: float | None = None
 
     def __call__(self, x2: np.ndarray) -> np.ndarray:
@@ -129,11 +135,13 @@ class ImpulseAverager:
         return z
 
 
-def make_time_weighting(tw: str, fs: float):
+def make_time_weighting(tw: str, fs: float, taus: dict | None = None):
+    """taus: времевите константи от избрания стандарт (fast, slow, impulse_rise, impulse_decay)."""
+    t = taus or {}
     if tw == "F":
-        return ExponentialAverager(TAU_FAST, fs)
+        return ExponentialAverager(t.get("fast", TAU_FAST), fs)
     if tw == "S":
-        return ExponentialAverager(TAU_SLOW, fs)
+        return ExponentialAverager(t.get("slow", TAU_SLOW), fs)
     if tw == "I":
-        return ImpulseAverager(fs)
+        return ImpulseAverager(fs, t.get("impulse_rise", TAU_IMPULSE_RISE), t.get("impulse_decay", TAU_IMPULSE_DECAY))
     raise ValueError(f"Непознат времеви филтър: {tw}")

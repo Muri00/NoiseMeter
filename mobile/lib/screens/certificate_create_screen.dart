@@ -5,8 +5,10 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/api_client.dart';
 import '../services/file_share.dart';
+import '../services/user_data.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ui.dart';
+import '../l10n/l10n.dart';
 
 /// Издаване на сертификат от избрани измервания (изискване 8).
 class CertificateCreateScreen extends StatefulWidget {
@@ -24,6 +26,7 @@ class _CertificateCreateScreenState extends State<CertificateCreateScreen> {
 
   late final Set<int> _selected = {for (final m in _finished) m.id};
   final _title = TextEditingController();
+  // Стандартите за метода на измерване (как се измерва) - по подразбиране ISO 1996.
   final _methods = TextEditingController(text: 'БДС ISO 1996-1:2016\nБДС ISO 1996-2:2018');
   final _normative = TextEditingController();
   final _remarks = TextEditingController();
@@ -42,6 +45,16 @@ class _CertificateCreateScreenState extends State<CertificateCreateScreen> {
     super.dispose();
   }
 
+  /// Стандартите на шумомера, по които са изчислени избраните измервания - сървърът ги вписва
+  /// в т. 5 „Технически средства“.
+  List<String> _standards(UserData data) {
+    final fallback = data.defaultStandard?.name ?? 'IEC 61672-1';
+    return {
+      for (final m in _finished)
+        if (_selected.contains(m.id)) m.standardName ?? fallback,
+    }.toList();
+  }
+
   static List<String> _lines(TextEditingController c) =>
       c.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
 
@@ -55,18 +68,18 @@ class _CertificateCreateScreenState extends State<CertificateCreateScreen> {
       final json = await api.post('/api/certificates', {
         'measurement_ids': [for (final m in _finished) if (_selected.contains(m.id)) m.id],
         if (_title.text.trim().isNotEmpty) 'title': _title.text.trim(),
-        'methods': _lines(_methods),
+        if (_lines(_methods).isNotEmpty) 'methods': _lines(_methods),
         if (_lines(_normative).isNotEmpty) 'normative': _lines(_normative),
         if (_remarks.text.trim().isNotEmpty) 'remarks': _remarks.text.trim(),
         if (_lines(_performedBy).isNotEmpty) 'performed_by': _lines(_performedBy),
       });
       final cert = CertificateInfo.fromJson(json);
-      await downloadAndShare(api, '/api/certificates/${cert.id}/pdf', 'certificate_${cert.number}.pdf');
+      await downloadAndOpen(api, '/api/certificates/${cert.id}/pdf', 'certificate_${cert.number}.pdf');
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } catch (e) {
-      setState(() => _error = 'Сертификатът е издаден, но не може да бъде споделен: $e');
+      setState(() => _error = tr('Сертификатът е издаден, но не може да бъде отворен: {p0}', {'p0': e}));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -75,159 +88,143 @@ class _CertificateCreateScreenState extends State<CertificateCreateScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const gap = SizedBox(height: 12);
-    final missingNorms = _finished
-        .where((m) => _selected.contains(m.id) && m.normDay == null && m.normEvening == null && m.normNight == null)
-        .length;
+    const gap = SizedBox(height: 16);
+    const groupGap = SizedBox(height: 24);
+    final points = _finished;
+    final standards = _standards(context.watch<UserData>());
 
     return Scaffold(
-      appBar: bandAppBar(),
+      appBar: bandAppBar(title: Text(tr('Нов сертификат'))),
       body: BandedListView(
-        header: const BandTitle(
-          title: 'Нов сертификат',
-          subtitle: 'Генериране на PDF протокол от измерване',
-        ),
         children: [
-          SectionCard(
-            title: 'Общи данни',
-            subtitle: 'Номерът и датата се задават автоматично',
-            icon: Icons.description_outlined,
-            child: Column(
-              children: [
-                TextField(
-                  controller: _title,
-                  decoration: const InputDecoration(
-                    labelText: 'Обект / предмет (по желание)',
-                    hintText: 'напр. Шумомерен анализ - бул. Витоша 10',
-                  ),
-                ),
-                gap,
-                TextField(
-                  controller: _methods,
-                  maxLines: null,
-                  decoration: const InputDecoration(labelText: 'Методи за измерване (по един на ред)'),
-                ),
-                gap,
-                TextField(
-                  controller: _normative,
-                  maxLines: null,
-                  decoration: const InputDecoration(
-                    labelText: 'Нормативни изисквания (по един на ред)',
-                    helperText: 'Празно - автоматично: Наредба № 6/2006, Прил. 2, табл. 2 и точките на зоните',
-                    helperMaxLines: 2,
-                  ),
-                ),
-              ],
+          TextField(
+            onChanged: (_) => setState(() {}),
+            controller: _title,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              labelText: tr('Обект / предмет *'),
+              hintText: tr('напр. Шумомерен анализ - бул. Витоша 10'),
             ),
           ),
-          if (missingNorms > 0) ...[
-            const SizedBox(height: 16),
-            InfoBanner(
-              message: '$missingNorms от избраните измервания нямат зададени гранични стойности '
-                  '(ден/вечер/нощ). Това ще се отрази в заключението на сертификата.',
-              color: AppColors.warning,
-              icon: Icons.warning_amber_rounded,
-            ),
-          ],
-          const SizedBox(height: 16),
-          SectionCard(
-            title: 'Избор на точки',
-            subtitle: 'Всяко избрано измерване е ред в таблицата с резултати',
-            icon: Icons.checklist_rounded,
-            child: Column(
-              children: [
-                for (final m in _finished) ...[
-                  _pointCard(m),
-                  const SizedBox(height: 8),
-                ],
-              ],
+          gap,
+          // Методи за измерване - стандартите, които описват как се измерва. Стандартът на
+          // шумомера не е метод и се вписва автоматично в техническите средства.
+          TextField(
+            controller: _methods,
+            maxLines: null,
+            decoration: InputDecoration(
+              labelText: tr('Методи за измерване (по един на ред)'),
+              helperText: standards.isEmpty
+                  ? null
+                  : tr('Шумомерът ({p0}) се вписва в т. 5 „Технически средства“', {'p0': standards.join(', ')}),
+              helperMaxLines: 3,
             ),
           ),
-          const SizedBox(height: 16),
-          SectionCard(
-            title: 'Допълнително',
-            icon: Icons.edit_note_rounded,
+          gap,
+          TextField(
+            controller: _normative,
+            maxLines: null,
+            decoration: InputDecoration(
+              labelText: tr('Нормативни изисквания (по един на ред)'),
+              helperText: tr('Празно - автоматично'),
+            ),
+          ),
+          groupGap,
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 4),
+            child: Text(tr('Изберете точки:'), style: sectionLabelStyle(context)),
+          ),
+          Material(
+            type: MaterialType.transparency,
             child: Column(
-              children: [
-                TextField(controller: _remarks, maxLines: null, decoration: const InputDecoration(labelText: 'Забележки')),
-                gap,
-                TextField(
-                  controller: _performedBy,
-                  maxLines: null,
-                  decoration: const InputDecoration(
-                    labelText: 'Извършил(и) измерването (по един на ред)',
-                    helperText: 'Празно - вашето име',
-                  ),
-                ),
-              ],
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [for (final m in points) _pointRow(m)],
+            ),
+          ),
+          groupGap,
+          TextField(
+            controller: _remarks,
+            minLines: 5,
+            maxLines: null,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(labelText: tr('Забележки'), alignLabelWithHint: true),
+          ),
+          gap,
+          TextField(
+            controller: _performedBy,
+            maxLines: null,
+            decoration: InputDecoration(
+              labelText: tr('Извършил(и) измерването (по един на ред)'),
+              helperText: tr('Празно - вашето име'),
             ),
           ),
           if (_error != null) ...[
-            const SizedBox(height: 16),
+            groupGap,
             InfoBanner(message: _error!, color: theme.colorScheme.error, icon: Icons.error_outline),
           ],
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _busy || _selected.isEmpty ? null : _create,
-            icon: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.picture_as_pdf_outlined),
-            label: Text('Издай сертификат (${_selected.length} ${_selected.length == 1 ? 'точка' : 'точки'})'),
+          groupGap,
+          FilledButton(
+            onPressed: _busy || _selected.isEmpty || _title.text.trim().isEmpty ? null : _create,
+            child: _busy
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : Text(_selected.length == 1
+                    ? tr('Издай сертификат (1 точка)')
+                    : tr('Издай сертификат ({p0} точки)', {'p0': _selected.length})),
           ),
-          const SizedBox(height: 32),
         ],
       ),
     );
   }
 
-  /// Карта за избор на измерване: отметка, място, време и LA,eq.
-  Widget _pointCard(Measurement m) {
+  /// Ред за избор на измерване: отметка, място, време, LA,eq и предупреждение при липсващи норми.
+  Widget _pointRow(Measurement m) {
     final theme = Theme.of(context);
     final selected = _selected.contains(m.id);
     final noNorms = m.normDay == null && m.normEvening == null && m.normNight == null;
-    return Material(
-      color: selected ? theme.colorScheme.primary.withValues(alpha: 0.06) : theme.colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(
-          color: selected ? theme.colorScheme.primary : theme.colorScheme.outlineVariant,
-          width: selected ? 1.6 : 1,
-        ),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: () => setState(() => selected ? _selected.remove(m.id) : _selected.add(m.id)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 14, 8),
-          child: Row(
-            children: [
-              Checkbox(
-                value: selected,
-                onChanged: (v) => setState(() => v == true ? _selected.add(m.id) : _selected.remove(m.id)),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(m.location ?? m.title, style: theme.textTheme.titleSmall),
-                    Text(
-                      '${_dateTime.format(m.startedAt)}${noNorms ? ' · без норма' : ''}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: noNorms ? AppColors.warning : theme.colorScheme.onSurfaceVariant,
+    void toggle(bool on) => setState(() => on ? _selected.add(m.id) : _selected.remove(m.id));
+    return InkWell(
+      onTap: () => toggle(!selected),
+      borderRadius: BorderRadius.circular(AppTheme.radius),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(0, 2, 2, 2),
+        child: Row(
+          children: [
+            Checkbox(value: selected, onChanged: (v) => toggle(v == true)),
+            const SizedBox(width: 2),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text([m.location ?? m.title, if (m.isSeries) m.pointLabel].join(' · '), style: theme.textTheme.bodyLarge),
+                  Text(
+                    _dateTime.format(m.startedAt),
+                    style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+                  ),
+                  if (noNorms)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, size: 14, color: AppColors.warning),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              tr('Точка без зададени норми'),
+                              style: theme.textTheme.bodySmall?.copyWith(color: AppColors.warning),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                ],
               ),
-              Text(
-                formatDb(m.summary['LAeq']),
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: AppColors.forLevel(m.summary['LAeq']),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              formatDb(m.summary['LAeq']),
+              style: monoStyle(15, weight: FontWeight.w500, color: AppColors.ink),
+            ),
+          ],
         ),
       ),
     );

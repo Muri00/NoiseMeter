@@ -71,7 +71,7 @@ def test_calibration_analysis():
 
 # ---------- Запис и история ----------
 
-def test_recording_and_history(client, auth_headers):
+def test_recording_and_history(client, auth_headers, admin_headers):
     headers, token = auth_headers
     device_id = _device(client, headers)
 
@@ -103,7 +103,12 @@ def test_recording_and_history(client, auth_headers):
     wav = client.get(f"/api/measurements/{mid}/wav", headers=headers)
     assert wav.status_code == 200 and wav.content[:4] == b"RIFF"
     assert b"2182175" in wav.content[:2000]
-    wav_files = list(Path(settings.recordings_dir).glob(f"measurement_{mid}_*.wav"))
+    # Версия за слушане: 16-битов PCM (формат 1), с поддръжка на превъртане (Range).
+    audio = client.get(f"/api/measurements/{mid}/audio", headers=headers)
+    assert audio.status_code == 200 and audio.content[20:22] == b"\x01\x00" and audio.content[34:36] == b"\x10\x00"
+    part = client.get(f"/api/measurements/{mid}/audio", headers=headers | {"Range": "bytes=0-99"})
+    assert part.status_code == 206 and len(part.content) == 100
+    wav_files = [p for p in Path(settings.recordings_dir).glob(f"measurement_{mid}_*.wav") if not p.stem.endswith("_play")]
     assert len(wav_files) == 1
 
     other = client.post("/api/auth/register", json={
@@ -111,7 +116,10 @@ def test_recording_and_history(client, auth_headers):
     }).json()["access_token"]
     assert client.get(f"/api/measurements/{mid}", headers={"Authorization": f"Bearer {other}"}).status_code == 404
 
-    assert client.delete(f"/api/measurements/{mid}", headers=headers).status_code == 204
+    # Само администраторът трие от историята; той вижда и чуждите записи.
+    assert client.delete(f"/api/measurements/{mid}", headers=headers).status_code == 403
+    assert any(m["id"] == mid for m in client.get("/api/history", headers=admin_headers).json()["measurements"])
+    assert client.delete(f"/api/measurements/{mid}", headers=admin_headers).status_code == 204
     assert client.get(f"/api/measurements/{mid}", headers=headers).status_code == 404
     assert not wav_files[0].exists()
 

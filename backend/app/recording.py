@@ -11,6 +11,7 @@ from app.audio.wavfile import WavWriter
 from app.config import settings
 from app.database import SessionLocal
 from app.models import Calibration, Device, Measurement, MeasurementFrame, utcnow
+from app.reports import norms
 
 # Редовете се записват в базата на пакети, за да не се пише при всяка секунда.
 _FLUSH_EVERY = 5
@@ -44,7 +45,8 @@ def device_snapshot(db, device: Device) -> dict:
 class Recorder:
     def __init__(
         self, *, user_id: int, device_id: int, meter: LevelMeter, indicators: list[str],
-        name: str | None, save_wav: bool,
+        name: str | None, save_wav: bool, place: dict | None = None,
+        standard: tuple[str, str] | None = None, out_of_band: bool = False,
     ):
         self.meter = meter
         self.pending: list[MeasurementFrame] = []
@@ -57,7 +59,18 @@ class Recorder:
                 user_id=user_id, device_id=device_id, name=name, sample_rate=int(cfg.fs),
                 f_min_hz=cfg.f_min, f_max_hz=cfg.f_max, band_mode=cfg.band_mode,
                 device_info=info, indicators=indicators,
+                location=(place or {}).get("location") or None,
+                place_type=(place or {}).get("place_type"),
+                point_no=(place or {}).get("point_no"),
+                point_count=(place or {}).get("point_count"),
+                series_id=(place or {}).get("series_id") or None,
+                source=(place or {}).get("source") or None,
+                period=(place or {}).get("period"),
+                standard_code=standard[0] if standard else None,
+                standard_name=standard[1] if standard else None,
+                out_of_band=out_of_band,
             )
+            norms.apply_zone(db, m, (place or {}).get("zone_code"))
             db.add(m)
             db.commit()
             self.measurement_id = m.id
@@ -80,7 +93,7 @@ class Recorder:
                     f"измервателен интервал: {cfg.f_min:g}-{cfg.f_max:g} Hz"
                 ),
                 "ICRD": f"{self.started_at:%Y-%m-%dT%H:%M:%S}Z",
-                "ISFT": "NoiseMeter",
+                "ISFT": "METRAVA",
             })
             with SessionLocal() as db:
                 db.get(Measurement, self.measurement_id).wav_path = str(path)

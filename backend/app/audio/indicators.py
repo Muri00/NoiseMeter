@@ -17,8 +17,12 @@ MIN_INDICATORS = 5
 DEFAULT_INDICATORS = ["LAF", "LAS", "LAeq", "LCF", "LZSmax"]
 
 
+# Ниво без честотен и без времеви филтър (средноквадратично за блок от 100 ms) и неговите max/min.
+UNWEIGHTED = ["Lp", "Lpmax", "Lpmin"]
+
+
 def all_indicators() -> list[str]:
-    codes = []
+    codes = list(UNWEIGHTED)
     for fw in FREQUENCY_WEIGHTINGS:
         for tw in TIME_WEIGHTINGS:
             codes += [f"L{fw}{tw}", f"L{fw}{tw}max", f"L{fw}{tw}min"]
@@ -27,12 +31,16 @@ def all_indicators() -> list[str]:
 
 
 def is_valid(code: str) -> bool:
+    if code in UNWEIGHTED:
+        return True
     m = _PATTERN.match(code)
     return m is not None and not (m.group(2) == "eq" and m.group(3))
 
 
 def display_name(code: str) -> str:
     """LAFmax -> LA,F,max (запис по стандарта)."""
+    if code in UNWEIGHTED:
+        return {"Lp": "Lp", "Lpmax": "Lp,max", "Lpmin": "Lp,min"}[code]
     m = _PATTERN.match(code)
     if not m:
         return code

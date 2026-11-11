@@ -3,14 +3,18 @@ import 'package:provider/provider.dart';
 
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/language_dialog.dart';
 import '../widgets/ui.dart';
+import '../l10n/l10n.dart';
+import 'login_screen.dart' show ServerButton;
 
 /// Същите изисквания като на сървъра - използва се и при смяна на паролата.
 String? validatePassword(String? v) {
-  if (v == null || v.length < 8) return 'Поне 8 символа';
-  if (v.length > 72) return 'Най-много 72 символа';
+  if (v == null || v.length < 8) return tr('Поне 8 символа');
+  if (v.length > 72) return tr('Най-много 72 символа');
   if (!RegExp(r'[A-Za-zА-Яа-я]').hasMatch(v) || !RegExp(r'\d').hasMatch(v)) {
-    return 'Трябва да съдържа поне една буква и една цифра';
+    return tr('Трябва да съдържа поне една буква и една цифра');
   }
   return null;
 }
@@ -31,6 +35,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   bool _busy = false;
+  bool _obscure = true;
   String? _error;
 
   @override
@@ -65,108 +70,112 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const gap = SizedBox(height: 12);
+    const gap = SizedBox(height: 16);
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Нов акаунт')),
+      appBar: AppBar(actions: const [LanguageButton(), ServerButton(), SizedBox(width: 8)]),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520),
             child: Form(
               key: _form,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Създайте акаунт, за да записвате измервания, да калибрирате устройствата си '
-                    'и да издавате сертификати.',
-                    style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                  const SizedBox(height: 16),
-                  SectionCard(
-                    title: 'Акаунт',
-                    icon: Icons.alternate_email_rounded,
-                    child: Column(
-                      children: [
-                        TextFormField(
-                          controller: _username,
-                          decoration: const InputDecoration(
-                            labelText: 'Потребителско име *',
-                            prefixIcon: Icon(Icons.person_outline_rounded),
-                          ),
-                          validator: (v) {
-                            if (v == null || v.trim().length < 3) return 'Поне 3 символа';
-                            if (!RegExp(r'^[A-Za-z0-9_.-]+$').hasMatch(v.trim())) {
-                              return 'Само латински букви, цифри и _ . -';
-                            }
-                            return null;
-                          },
-                        ),
-                        gap,
-                        TextFormField(
-                          controller: _email,
-                          keyboardType: TextInputType.emailAddress,
-                          decoration: const InputDecoration(labelText: 'Имейл *', prefixIcon: Icon(Icons.mail_outline_rounded)),
-                          validator: (v) => (v == null || !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim()))
-                              ? 'Невалиден имейл'
-                              : null,
-                        ),
-                      ],
+              child: AutofillGroup(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      tr('Регистрация'),
+                      style: theme.textTheme.headlineLarge?.copyWith(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.ink,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  SectionCard(
-                    title: 'Лични данни',
-                    subtitle: 'По желание - използват се в сертификатите',
-                    icon: Icons.badge_outlined,
-                    child: Row(
-                      children: [
-                        Expanded(child: TextFormField(controller: _firstName, decoration: const InputDecoration(labelText: 'Име'))),
-                        const SizedBox(width: 12),
-                        Expanded(child: TextFormField(controller: _lastName, decoration: const InputDecoration(labelText: 'Фамилия'))),
-                      ],
+                    const SizedBox(height: 20),
+                    TextFormField(
+                      controller: _username,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.newUsername],
+                      decoration: InputDecoration(labelText: tr('Потребителско име')),
+                      validator: (v) {
+                        if (v == null || v.trim().length < 3) return tr('Поне 3 символа');
+                        if (!RegExp(r'^[A-Za-z0-9_.-]+$').hasMatch(v.trim())) {
+                          return tr('Само латински букви, цифри и _ . -');
+                        }
+                        return null;
+                      },
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  SectionCard(
-                    title: 'Парола',
-                    subtitle: 'Поне 8 символа, с буква и цифра',
-                    icon: Icons.lock_outline_rounded,
-                    child: Column(
-                      children: [
-                        TextFormField(
-                          controller: _password,
-                          obscureText: true,
-                          decoration: const InputDecoration(labelText: 'Парола *', prefixIcon: Icon(Icons.key_outlined)),
-                          validator: validatePassword,
-                        ),
-                        gap,
-                        TextFormField(
-                          controller: _confirm,
-                          obscureText: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Повторете паролата *',
-                            prefixIcon: Icon(Icons.key_outlined),
-                          ),
-                          validator: (v) => v != _password.text ? 'Паролите не съвпадат' : null,
-                        ),
-                      ],
+                    gap,
+                    TextFormField(
+                      controller: _email,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.email],
+                      decoration: InputDecoration(labelText: tr('Имейл')),
+                      validator: (v) => (v == null || !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim()))
+                          ? tr('Невалиден имейл')
+                          : null,
                     ),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 16),
-                    InfoBanner(message: _error!, color: theme.colorScheme.error, icon: Icons.error_outline),
+                    gap,
+                    TextFormField(
+                      controller: _password,
+                      obscureText: _obscure,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.newPassword],
+                      decoration: InputDecoration(labelText: tr('Парола')),
+                      validator: validatePassword,
+                    ),
+                    gap,
+                    TextFormField(
+                      controller: _confirm,
+                      obscureText: _obscure,
+                      textInputAction: TextInputAction.next,
+                      decoration: InputDecoration(
+                        labelText: tr('Повторете паролата'),
+                        suffixIcon: IconButton(
+                          tooltip: _obscure ? tr('Покажи паролите') : tr('Скрий паролите'),
+                          icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                          onPressed: () => setState(() => _obscure = !_obscure),
+                        ),
+                      ),
+                      validator: (v) => v != _password.text ? tr('Паролите не съвпадат') : null,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+                      child: Text(
+                        tr('Поне 8 символа, с буква и цифра'),
+                        style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+                      ),
+                    ),
+                    gap,
+                    TextFormField(
+                      controller: _firstName,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.givenName],
+                      decoration: InputDecoration(labelText: tr('Име (по избор)')),
+                    ),
+                    gap,
+                    TextFormField(
+                      controller: _lastName,
+                      autofillHints: const [AutofillHints.familyName],
+                      decoration: InputDecoration(labelText: tr('Фамилия (по избор)')),
+                      onFieldSubmitted: (_) => _submit(),
+                    ),
+                    if (_error != null) ...[
+                      gap,
+                      InfoBanner(message: _error!, color: theme.colorScheme.error, icon: Icons.error_outline),
+                    ],
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: _busy ? null : _submit,
+                      child: _busy
+                          ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2.4))
+                          : Text(tr('Създай акаунт')),
+                    ),
                   ],
-                  const SizedBox(height: 24),
-                  FilledButton(
-                    onPressed: _busy ? null : _submit,
-                    child: _busy
-                        ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2.4))
-                        : const Text('Създай акаунт'),
-                  ),
-                ],
+                ),
               ),
             ),
           ),

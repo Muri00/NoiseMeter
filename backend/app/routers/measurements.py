@@ -8,16 +8,18 @@ from pathlib import Path
 from typing import Annotated
 
 import numpy as np
+from scipy.io import wavfile
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 
 from app.audio import indicators as indicator_codes
 from app.config import settings
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, CurrentUser, DbSession
 from app.models import Measurement, MeasurementFrame, utcnow
+from app.reports import norms
 from app.schemas import (
-    BandsOut, HistoryOut, MeasurementDetailOut, MeasurementOut, SeriesOut, TimelinePoint,
+    BandsOut, HistoryOut, MeasurementDetailOut, MeasurementOut, SeriesOut, SeriesPointOut, TimelinePoint,
 )
 
 router = APIRouter(tags=["История"])
@@ -69,10 +71,16 @@ def _bucket_seconds(span: timedelta) -> int:
 
 
 def _get_own(db, user, measurement_id: int) -> Measurement:
+    """Измерването, ако потребителят има достъп до него: собственикът или администратор."""
     m = db.get(Measurement, measurement_id)
-    if m is None or m.user_id != user.id:
+    if m is None or (m.user_id != user.id and not user.is_admin):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Измерването не е намерено")
     return m
+
+
+def visible_measurements(user):
+    """Условие за измерванията, които потребителят вижда: администраторът - всички."""
+    return true() if user.is_admin else (Measurement.user_id == user.id)
 
 
 # ---------- Справка за период ----------
@@ -89,7 +97,7 @@ def history(
 
     measurements = db.scalars(
         select(Measurement)
-        .where(Measurement.user_id == user.id, Measurement.started_at < to)
+        .where(visible_measurements(user), Measurement.started_at < to)
         .where(func.coalesce(Measurement.ended_at, Measurement.started_at) >= frm)
         .order_by(Measurement.started_at.desc())
     ).all()
@@ -97,7 +105,7 @@ def history(
     rows = db.execute(
         select(MeasurementFrame.ts, MeasurementFrame.leq_a, MeasurementFrame.leq_c, MeasurementFrame.leq_z)
         .join(Measurement)
-        .where(Measurement.user_id == user.id, MeasurementFrame.ts >= frm, MeasurementFrame.ts < to)
+        .where(visible_measurements(user), MeasurementFrame.ts >= frm, MeasurementFrame.ts < to)
         .order_by(MeasurementFrame.ts)
         .execution_options(yield_per=5000)
     )
@@ -158,8 +166,22 @@ def get_measurement(measurement_id: int, user: CurrentUser, db: DbSession):
             levels=[round(float(v), 2) for v in 10 * np.log10(np.mean(10 ** (levels / 10), axis=0))],
         )
 
+    # Точките от същата серия (едно помещение) и енергийното средно LAeq от тях.
+    series_points, series_laeq = [], None
+    if m.series_id:
+        siblings = db.scalars(
+            select(Measurement)
+            .where(Measurement.series_id == m.series_id, Measurement.user_id == m.user_id)
+            .order_by(Measurement.point_no, Measurement.started_at)
+        ).all()
+        series_points = [
+            SeriesPointOut(id=s.id, point_no=s.point_no, laeq=(s.summary or {}).get("LAeq")) for s in siblings
+        ]
+        series_laeq = norms.energy_mean(p.laeq for p in series_points if p.laeq is not None)
+
     base = MeasurementOut.model_validate(m).model_dump()
-    return MeasurementDetailOut(**base, frame_count=len(frames), average_bands=average_bands)
+    return MeasurementDetailOut(**base, frame_count=len(frames), average_bands=average_bands,
+                                series_points=series_points, series_laeq=series_laeq)
 
 
 @router.get("/api/measurements/{measurement_id}/series", response_model=SeriesOut)
@@ -262,12 +284,32 @@ def download_wav(measurement_id: int, user: CurrentUser, db: DbSession):
     return FileResponse(m.wav_path, media_type="audio/wav", filename=Path(m.wav_path).name)
 
 
+@router.get("/api/measurements/{measurement_id}/audio")
+def play_audio(measurement_id: int, user: CurrentUser, db: DbSession):
+    """Записът за слушане в приложението: 16-битов PCM WAV (оригиналът е 32-битов float,
+    който не всички телефони възпроизвеждат). Копието се прави веднъж и се пази до оригинала."""
+    m = _get_own(db, user, measurement_id)
+    if not m.wav_path or not Path(m.wav_path).exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Няма WAV запис за това измерване")
+    original = Path(m.wav_path)
+    playable = original.with_name(original.stem + "_play.wav")
+    if not playable.exists() or playable.stat().st_mtime < original.stat().st_mtime:
+        fs, data = wavfile.read(original)
+        pcm = (np.clip(np.asarray(data, dtype=np.float64), -1.0, 1.0) * 32767).astype(np.int16)
+        tmp = playable.with_suffix(".tmp")
+        wavfile.write(tmp, fs, pcm)
+        tmp.replace(playable)
+    return FileResponse(playable, media_type="audio/wav", filename=playable.name)
+
+
 @router.delete("/api/measurements/{measurement_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_measurement(measurement_id: int, user: CurrentUser, db: DbSession):
+def delete_measurement(measurement_id: int, user: AdminUser, db: DbSession):
+    """Само администраторът може да трие записи от историята."""
     m = _get_own(db, user, measurement_id)
     wav = Path(m.wav_path) if m.wav_path else None
     db.delete(m)
     db.commit()
     if wav:
         wav.unlink(missing_ok=True)
+        wav.with_name(wav.stem + "_play.wav").unlink(missing_ok=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

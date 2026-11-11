@@ -8,6 +8,13 @@ void main() {
     expect(indicatorName('LAeq'), 'LA,eq');
   });
 
+  test('indicatorDescription explains the code in words', () {
+    expect(indicatorDescription('LAFmax'), 'Максимално ниво, филтър A, бързо (F)');
+    expect(indicatorDescription('LAeq'), 'Еквивалентно ниво, филтър A');
+    expect(indicatorDescription('LZS'), 'Текущо ниво, без честотен филтър (Z), бавно (S)');
+    expect(indicatorDescription('Lpmin'), 'Минимално звуково налягане без филтри');
+  });
+
   test('formatHz', () {
     expect(formatHz(20), '20 Hz');
     expect(formatHz(31.5), '31.5 Hz');

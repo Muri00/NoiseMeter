@@ -2,7 +2,7 @@ import calendar
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
-    JSON, BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func,
+    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -38,10 +38,17 @@ class User(Base):
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime)
     first_name: Mapped[str | None] = mapped_column(String(50))
     last_name: Mapped[str | None] = mapped_column(String(50))
+    # "admin" вижда и управлява историята на всички, нормите на зоните и стандартите.
+    # NULL или "user" - обикновен потребител.
+    role: Mapped[str | None] = mapped_column(String(10))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
 
     devices: Mapped[list["Device"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
@@ -157,16 +164,36 @@ class Measurement(Base):
     wav_path: Mapped[str | None] = mapped_column(String(500))
 
     # Място и норми - за отчетите и сертификатите (изисквания 7 и 8).
-    location: Mapped[str | None] = mapped_column(String(200))  # място / точка на измерване
+    location: Mapped[str | None] = mapped_column(String(200))  # място на измерване (помещение, адрес)
+    # Вид на мястото: "indoor" (закрито помещение) или "outdoor" (открито място, фонов шум).
+    place_type: Mapped[str | None] = mapped_column(String(10))
+    # Точка от серия измервания в едно помещение: № на точката, брой точки и общ идентификатор.
+    # Броят на точките се избира от потребителя на място според големината на помещението.
+    point_no: Mapped[int | None] = mapped_column(Integer)
+    point_count: Mapped[int | None] = mapped_column(Integer)
+    series_id: Mapped[str | None] = mapped_column(String(40), index=True)
     source: Mapped[str | None] = mapped_column(String(200))  # източник / режим, напр. "Автомобилен трафик"
     zone_code: Mapped[str | None] = mapped_column(String(20))  # ред от табл. 2 на Наредба 6 или "custom"
     norm_day: Mapped[float | None] = mapped_column(Float)
     norm_evening: Mapped[float | None] = mapped_column(Float)
     norm_night: Mapped[float | None] = mapped_column(Float)
+    # Период от денонощието: "day", "evening", "night" или NULL - определя се по часа на всяка секунда.
+    period: Mapped[str | None] = mapped_column(String(10))
+    # Стандарт, по който са изчислени филтрите.
+    standard_code: Mapped[str | None] = mapped_column(String(40))
+    standard_name: Mapped[str | None] = mapped_column(String(200))
+    # Измервателният интервал излиза извън работната лента на микрофона - резултатът е ненадежден.
+    out_of_band: Mapped[bool | None] = mapped_column(Boolean)
 
     @property
     def has_wav(self) -> bool:
         return self.wav_path is not None
+
+    owner: Mapped["User"] = relationship(lazy="joined")
+
+    @property
+    def owner_username(self) -> str | None:
+        return self.owner.username if self.owner else None
 
     frames: Mapped[list["MeasurementFrame"]] = relationship(
         back_populates="measurement", cascade="all, delete-orphan", passive_deletes=True,
@@ -248,3 +275,33 @@ class Certificate(Base):
     number: Mapped[str] = mapped_column(String(30))
     issued_at: Mapped[datetime] = mapped_column(PreciseDateTime, default=utcnow)
     data: Mapped[dict] = mapped_column(JSON)
+
+
+class Zone(Base):
+    """Зона с гранични стойности по Наредба № 6/2006. Нормите се променят само от администратор."""
+
+    __tablename__ = "zones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True)
+    name: Mapped[str] = mapped_column(String(300))
+    # "outdoor" (открити територии, табл. 2) или "indoor" (помещения)
+    category: Mapped[str] = mapped_column(String(10), default="outdoor")
+    day: Mapped[float | None] = mapped_column(Float)
+    evening: Mapped[float | None] = mapped_column(Float)
+    night: Mapped[float | None] = mapped_column(Float)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Standard(Base):
+    """Стандарт за измерване - от него се вземат коефициентите на честотните и времевите филтри."""
+
+    __tablename__ = "standards"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    # Полюсни честоти f1..f4 (Hz) на филтрите A и C и времеви константи (s).
+    params: Mapped[dict] = mapped_column(JSON)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)

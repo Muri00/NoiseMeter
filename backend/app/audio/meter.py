@@ -6,7 +6,9 @@ import numpy as np
 
 from app.audio import octave
 from app.audio.indicators import FREQUENCY_WEIGHTINGS, TIME_WEIGHTINGS
-from app.audio.weighting import SosFilter, design_bandpass, design_weighting, make_time_weighting
+from app.audio.weighting import (
+    IEC_POLES, SosFilter, design_bandpass, design_weighting, make_time_weighting,
+)
 
 # Долна граница при логаритмуване, за да няма log(0).
 _TINY = 1e-20
@@ -23,6 +25,9 @@ class MeterConfig:
     f_min: float
     f_max: float
     band_mode: str = "1/3"  # "off", "1/1" или "1/3"
+    # Коефициенти от избрания стандарт: полюсни честоти f1..f4 и времеви константи.
+    poles: tuple | None = None
+    taus: dict | None = None
 
 
 class _Stats:
@@ -32,6 +37,9 @@ class _Stats:
         self.energy = {fw: 0.0 for fw in FREQUENCY_WEIGHTINGS}
         self.max_ms: dict[tuple[str, str], float] = {}
         self.min_ms: dict[tuple[str, str], float] = {}
+        # Lp - ниво без честотен и без времеви филтър (средноквадратично за всеки блок от 100 ms).
+        self.lp_max = 0.0
+        self.lp_min = np.inf
         self.samples = 0
 
     def levels(self, offset_db: float) -> dict[str, float]:
@@ -42,6 +50,9 @@ class _Stats:
             out[f"L{fw}{tw}max"] = to_db(v, offset_db)
         for (fw, tw), v in self.min_ms.items():
             out[f"L{fw}{tw}min"] = to_db(v, offset_db)
+        if self.samples:
+            out["Lpmax"] = to_db(self.lp_max, offset_db)
+            out["Lpmin"] = to_db(self.lp_min, offset_db)
         return out
 
 
@@ -56,9 +67,10 @@ class LevelMeter:
     def __init__(self, cfg: MeterConfig):
         self.cfg = cfg
         self.bandpass = SosFilter(design_bandpass(cfg.f_min, cfg.f_max, cfg.fs))
-        self.freq_filters = {fw: SosFilter(design_weighting(fw, cfg.fs)) for fw in FREQUENCY_WEIGHTINGS}
+        poles = cfg.poles or IEC_POLES
+        self.freq_filters = {fw: SosFilter(design_weighting(fw, cfg.fs, poles)) for fw in FREQUENCY_WEIGHTINGS}
         self.time_filters = {
-            (fw, tw): make_time_weighting(tw, cfg.fs)
+            (fw, tw): make_time_weighting(tw, cfg.fs, cfg.taus)
             for fw in FREQUENCY_WEIGHTINGS
             for tw in TIME_WEIGHTINGS
         }
@@ -84,8 +96,12 @@ class LevelMeter:
         """Обработва един блок и връща кадър с всички текущи стойности в dB."""
         off = self.cfg.offset_db
         x = self.bandpass(np.asarray(block, dtype=np.float64))
+        block_ms = float(np.mean(x * x))
         for stats in (self.total, self.interval):
             stats.samples += len(x)
+            stats.lp_max = max(stats.lp_max, block_ms)
+            stats.lp_min = min(stats.lp_min, block_ms)
+        self.current["Lp"] = to_db(block_ms, off)
 
         for fw in FREQUENCY_WEIGHTINGS:
             xw = self.freq_filters[fw](x)

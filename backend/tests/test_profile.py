@@ -19,7 +19,7 @@ def test_update_profile(client):
     r = client.put("/api/auth/me", json={"email": "New@Example.com", "first_name": " Иван ", "last_name": ""}, headers=h)
     assert r.status_code == 200
     assert r.json() | {"id": 0} == {"id": 0, "username": "profile1", "email": "new@example.com",
-                                      "first_name": "Иван", "last_name": None}
+                                      "first_name": "Иван", "last_name": None, "is_admin": False}
     taken = client.put("/api/auth/me", json={"email": "profile2@example.com"}, headers=h)
     assert taken.status_code == 409
 
@@ -60,3 +60,25 @@ def test_delete_account(client):
     assert client.get("/api/auth/me", headers=h).status_code == 401
     assert client.post("/api/auth/login", json={"login": "leaver", "password": "Parola123"}).status_code == 401
     assert not wav.exists()
+
+
+def test_error_messages_follow_language(client):
+    bad = {"login": "nobody", "password": "Greshna123"}
+    bg = client.post("/api/auth/login", json=bad)
+    en = client.post("/api/auth/login", json=bad, headers={"Accept-Language": "en"})
+    assert bg.json()["detail"] == "Грешно потребителско име или парола"
+    assert en.json()["detail"] == "Wrong username or password"
+
+    weak = {"username": "languser", "email": "lang@example.com", "password": "abcdefgh"}
+    r = client.post("/api/auth/register", json=weak, headers={"Accept-Language": "en"})
+    assert r.status_code == 422
+    assert "at least one letter and one digit" in r.json()["detail"][0]["msg"]
+
+
+def test_websocket_errors_follow_language(client, auth_headers):
+    _, token = auth_headers
+    with client.websocket_connect("/ws/measure") as ws:
+        ws.send_json({"action": "auth", "token": token, "lang": "en"})
+        assert ws.receive_json()["type"] == "auth_ok"
+        ws.send_json({"action": "start", "device_id": 999999, "f_min": 20, "f_max": 20000})
+        assert ws.receive_json() == {"type": "error", "message": "Device not found"}

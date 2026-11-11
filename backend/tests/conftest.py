@@ -29,6 +29,29 @@ def client():
         yield c
 
 
+def make_admin(username: str) -> None:
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import User
+
+    with SessionLocal() as db:
+        db.scalar(select(User).where(User.username == username)).role = "admin"
+        db.commit()
+
+
+@pytest.fixture
+def admin_headers(client):
+    import uuid
+
+    name = "admin" + uuid.uuid4().hex[:8]
+    r = client.post("/api/auth/register", json={
+        "username": name, "email": f"{name}@example.com", "password": "Parola123",
+    })
+    make_admin(name)
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
 @pytest.fixture
 def auth_headers(client):
     import uuid

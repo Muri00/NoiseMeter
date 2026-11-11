@@ -7,6 +7,8 @@ import '../services/measurement_service.dart';
 import 'login_screen.dart' show showServerDialog;
 import '../theme/app_theme.dart';
 import '../widgets/ui.dart';
+import '../l10n/l10n.dart';
+import '../widgets/language_dialog.dart';
 import 'change_password_screen.dart';
 
 /// Профил: лични данни, смяна на паролата, изход и изтриване на акаунта.
@@ -17,30 +19,43 @@ class ProfileScreen extends StatefulWidget {
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
+enum _Field { email, firstName, lastName }
+
 class _ProfileScreenState extends State<ProfileScreen> {
-  final _profileForm = GlobalKey<FormState>();
   late final AuthService _auth = context.read<AuthService>();
-  late final _email = TextEditingController(text: _auth.user?.email);
-  late final _firstName = TextEditingController(text: _auth.user?.firstName);
-  late final _lastName = TextEditingController(text: _auth.user?.lastName);
   bool _savingProfile = false;
 
-  @override
-  void dispose() {
-    for (final c in [_email, _firstName, _lastName]) {
-      c.dispose();
-    }
-    super.dispose();
-  }
+  static final _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
   void _snack(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
-  Future<void> _saveProfile() async {
-    if (!_profileForm.currentState!.validate()) return;
+  /// Редакция на едно поле в долен лист; записва веднага.
+  Future<void> _editField(_Field field) async {
+    if (_savingProfile) return;
+    final user = _auth.user;
+    final (title, initial) = switch (field) {
+      _Field.email => (tr('Имейл'), user?.email ?? ''),
+      _Field.firstName => (tr('Име'), user?.firstName ?? ''),
+      _Field.lastName => (tr('Фамилия'), user?.lastName ?? ''),
+    };
+    final value = await showTextSheet(context, title: title, confirmLabel: tr('Запази'), initial: initial);
+    if (value == null || value == initial || !mounted) return;
+    if (field == _Field.email && !_emailPattern.hasMatch(value.trim())) {
+      _snack(tr('Невалиден имейл'));
+      return;
+    }
+    await _saveProfile(
+      email: field == _Field.email ? value : (user?.email ?? ''),
+      firstName: field == _Field.firstName ? value : user?.firstName,
+      lastName: field == _Field.lastName ? value : user?.lastName,
+    );
+  }
+
+  Future<void> _saveProfile({required String email, String? firstName, String? lastName}) async {
     setState(() => _savingProfile = true);
     try {
-      await _auth.updateProfile(email: _email.text, firstName: _firstName.text, lastName: _lastName.text);
-      _snack('Данните са запазени');
+      await _auth.updateProfile(email: email, firstName: firstName, lastName: lastName);
+      _snack(tr('Данните са запазени'));
     } on ApiException catch (e) {
       _snack(e.message);
     } finally {
@@ -52,7 +67,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(builder: (_) => const ChangePasswordScreen()),
     );
-    if (changed == true) _snack('Паролата е сменена. Излязохте от акаунта на другите устройства.');
+    if (changed == true) _snack(tr('Паролата е сменена. Излязохте от акаунта на другите устройства.'));
   }
 
   void _logout() {
@@ -66,28 +81,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Изтриване на акаунта'),
+        title: Text(tr('Изтриване на акаунта')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              'Ще бъдат изтрити окончателно всички устройства, измервания, WAV записи, '
-              'калибровки и сертификати. Това не може да бъде отменено.',
+            Text(
+              tr('Ще бъдат изтрити окончателно всички устройства, измервания, WAV записи, '
+              'калибровки и сертификати. Това не може да бъде отменено.'),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: password,
               obscureText: true,
-              decoration: const InputDecoration(labelText: 'Парола за потвърждение'),
+              decoration: InputDecoration(labelText: tr('Парола за потвърждение')),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отказ')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Отказ'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Изтрий'),
+            child: Text(tr('Изтрий')),
           ),
         ],
       ),
@@ -105,164 +120,74 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthService>();
+    final user = auth.user;
     final theme = Theme.of(context);
-    const gap = SizedBox(height: 12);
-    final initial = (auth.user?.displayName ?? '?').characters.first.toUpperCase();
+    const groupGap = SizedBox(height: 24);
+    final handle = [
+      '@${user?.username ?? ''}',
+      if ((user?.email ?? '').isNotEmpty) user!.email,
+    ].join(' · ');
 
-    // На таблет страницата е центрирана; отстъпът отстрани расте с ширината.
-    final side = ((MediaQuery.sizeOf(context).width - 760) / 2).clamp(16.0, double.infinity);
-    return ListView(
-      padding: EdgeInsets.fromLTRB(side, 4, side, 32),
-      children: [
-        // Заглавна карта с аватар.
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            gradient: AppColors.heroGradient,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: const [BoxShadow(color: Color(0x330B2545), blurRadius: 20, offset: Offset(0, 8))],
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(3),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 2),
-                ),
-                child: CircleAvatar(
-                  radius: 30,
-                  backgroundColor: Colors.white,
-                  child: Text(
-                    initial,
-                    style: theme.textTheme.headlineSmall?.copyWith(color: AppColors.ink, fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      auth.user?.displayName ?? '',
-                      style: theme.textTheme.titleLarge?.copyWith(color: Colors.white),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    StatusPill(
-                      label: '@${auth.user?.username ?? ''}',
-                      color: Colors.white,
-                      icon: Icons.person_outline_rounded,
-                      onDark: true,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        SectionCard(
-          title: 'Лични данни',
-          subtitle: 'Името се използва в сертификатите',
-          icon: Icons.badge_outlined,
-          child: Form(
-            key: _profileForm,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextFormField(
-                  controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: 'Имейл', prefixIcon: Icon(Icons.mail_outline_rounded)),
-                  validator: (v) => (v == null || !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim()))
-                      ? 'Невалиден имейл'
-                      : null,
-                ),
-                gap,
-                Row(
-                  children: [
-                    Expanded(child: TextFormField(controller: _firstName, decoration: const InputDecoration(labelText: 'Име'))),
-                    const SizedBox(width: 12),
-                    Expanded(child: TextFormField(controller: _lastName, decoration: const InputDecoration(labelText: 'Фамилия'))),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                FilledButton.tonalIcon(
-                  onPressed: _savingProfile ? null : _saveProfile,
-                  icon: _savingProfile
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.check_rounded),
-                  label: const Text('Запази данните'),
-                ),
-              ],
+    return BandedListView(
+      header: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 8, 4, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              user?.displayName ?? '',
+              style: theme.textTheme.headlineSmall,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-          ),
+            const SizedBox(height: 4),
+            Text(
+              handle,
+              style: theme.textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ),
-        const SizedBox(height: 16),
-        SectionCard(
-          title: 'Акаунт и сигурност',
-          icon: Icons.shield_outlined,
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Column(
-            children: [
-              _tile(
-                icon: Icons.lock_outline_rounded,
-                title: 'Смяна на паролата',
-                subtitle: 'Излизане от другите устройства',
-                onTap: _changePassword,
-              ),
-              _tile(
-                icon: Icons.dns_outlined,
-                title: 'Сървър',
-                subtitle: auth.serverUrl,
-                onTap: () => showServerDialog(context),
-              ),
-              _tile(icon: Icons.logout_rounded, title: 'Изход', onTap: _logout, showChevron: false),
-            ],
-          ),
+      ),
+      children: [
+        RowGroup(
+          title: tr('Лични данни'),
+          trailing: _savingProfile
+              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+              : null,
+          children: [
+            ValueRow(label: tr('Имейл'), value: user?.email, onTap: () => _editField(_Field.email)),
+            ValueRow(label: tr('Име'), value: user?.firstName, onTap: () => _editField(_Field.firstName)),
+            ValueRow(label: tr('Фамилия'), value: user?.lastName, onTap: () => _editField(_Field.lastName)),
+            ValueRow(label: tr('Смяна на паролата'), onTap: _changePassword),
+          ],
         ),
-        const SizedBox(height: 16),
-        // Опасна зона - отделена визуално от останалото.
-        Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.error.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: theme.colorScheme.error.withValues(alpha: 0.25)),
-          ),
-          padding: const EdgeInsets.all(8),
-          child: _tile(
-            icon: Icons.delete_forever_outlined,
-            title: 'Изтриване на акаунта',
-            subtitle: 'Окончателно, заедно с всички данни',
-            onTap: _deleteAccount,
-            color: theme.colorScheme.error,
-          ),
+        groupGap,
+        RowGroup(
+          title: tr('Система и език'),
+          children: [
+            ValueRow(label: tr('Сървър'), value: auth.serverUrl, onTap: () => showServerDialog(context)),
+            ValueRow(
+              label: tr('Език'),
+              value: AppLanguage.current == 'en' ? 'English' : 'Български',
+              onTap: () => showLanguageDialog(context),
+            ),
+          ],
+        ),
+        groupGap,
+        OutlinedButton.icon(
+          onPressed: _logout,
+          icon: const Icon(Icons.logout_rounded),
+          label: Text(tr('Изход')),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+          onPressed: _deleteAccount,
+          child: Text(tr('Изтриване на акаунта')),
         ),
       ],
-    );
-  }
-
-  Widget _tile({
-    required IconData icon,
-    required String title,
-    String? subtitle,
-    required VoidCallback onTap,
-    Color? color,
-    bool showChevron = true,
-  }) {
-    final theme = Theme.of(context);
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-      leading: IconBadge(icon: icon, color: color ?? theme.colorScheme.secondary, size: 40),
-      title: Text(title, style: theme.textTheme.titleSmall?.copyWith(color: color)),
-      subtitle: subtitle == null
-          ? null
-          : Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-      trailing: showChevron ? Icon(Icons.chevron_right_rounded, color: theme.colorScheme.onSurfaceVariant) : null,
-      onTap: onTap,
     );
   }
 }

@@ -73,7 +73,7 @@ def build_workbook(items: list[tuple], indicators: list[str], title: str) -> byt
     ] + [f"{indicator_codes.display_name(c)}, dB" for c in summary_codes])
 
     for m, frames in items:
-        per_period = norms.period_levels(frames)
+        per_period = norms.period_levels(frames, m.period)
         if not per_period:
             per_period = {"": {"laeq": m.summary.get("LAeq") if m.summary else None,
                                "start": m.started_at, "end": m.ended_at or m.started_at}}
@@ -81,12 +81,14 @@ def build_workbook(items: list[tuple], indicators: list[str], title: str) -> byt
             norm = norms.norm_for(m, period) if period else None
             ok = norms.within_limit(p["laeq"], norm)
             ws.append([
-                m.id, _local(p["start"]), _local(p["end"]), m.location or "", m.source or "",
+                m.id, _local(p["start"]), _local(p["end"]), norms.place_label(m), m.source or "",
                 device_label(m.device_info), norms.PERIOD_NAMES.get(period, ""),
                 p["laeq"], norm, _yes_no(ok),
             ] + [(m.summary or {}).get(c) for c in summary_codes])
             row = ws[ws.max_row]
             row[1].number_format = row[2].number_format = _DATE_FMT
+            # Измереното ниво и „В границите“: зелено - в норма, червено - превишение.
+            _mark(row[7], ok)
             _mark(row[9], ok)
     _fit_columns(ws, {2: 19, 3: 19, 4: 22, 5: 20, 6: 30, 8: 14, 9: 16, 10: 11})
 
@@ -104,14 +106,15 @@ def build_workbook(items: list[tuple], indicators: list[str], title: str) -> byt
         for f in frames:
             if rows >= MAX_DATA_ROWS:
                 break
-            period = norms.period_of(f.ts)
+            period = norms.frame_period(m, f.ts)
             norm = norms.norm_for(m, period)
             ok = norms.within_limit(f.leq_a, norm)
             ws.append([
-                _local(f.ts), label, m.location or "", m.id, norms.PERIOD_NAMES[period],
+                _local(f.ts), label, norms.place_label(m), m.id, norms.PERIOD_NAMES[period],
             ] + [f.levels.get(c) for c in codes] + [norm, _yes_no(ok)])
             row = ws[ws.max_row]
             row[0].number_format = _DATE_FMT
+            _mark(row[5], ok)  # LA,eq за секундата
             _mark(row[-1], ok)
             rows += 1
     if rows >= MAX_DATA_ROWS:

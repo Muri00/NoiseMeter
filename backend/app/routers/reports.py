@@ -6,14 +6,14 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import extract, func, select
 
-from app.deps import CurrentUser, DbSession
-from app.models import Calibration, Certificate, Measurement, MeasurementFrame
+from app.deps import AdminUser, CurrentUser, DbSession
+from app.models import Calibration, Certificate, Measurement, MeasurementFrame, Standard, Zone
 from app.reports import certificate as cert_pdf
 from app.reports import excel, norms
-from app.routers.measurements import _get_own, resolve_period
+from app.routers.measurements import _get_own, resolve_period, visible_measurements
 from app.routers.user_settings import get_or_create_settings
 from app.schemas import (
-    CertificateIn, CertificateOut, MeasurementOut, MeasurementUpdate, OrganizationSettings, ZoneOut,
+    CertificateIn, CertificateOut, MeasurementOut, MeasurementUpdate, OrganizationSettings,
 )
 
 router = APIRouter(tags=["Отчети"])
@@ -32,24 +32,18 @@ def _frames(db, measurement_id: int):
     ).all()
 
 
-# ---------- Норми и място на измерване ----------
-
-@router.get("/api/norms/zones", response_model=list[ZoneOut])
-def zones():
-    """Гранични стойности по Наредба № 6/2006, Приложение 2, таблица 2."""
-    return [ZoneOut(**z.__dict__) for z in norms.ZONES]
-
+# ---------- Място и норми (само администратор) ----------
 
 @router.patch("/api/measurements/{measurement_id}", response_model=MeasurementOut)
-def update_measurement(measurement_id: int, data: MeasurementUpdate, user: CurrentUser, db: DbSession):
-    m = _get_own(db, user, measurement_id)
+def update_measurement(measurement_id: int, data: MeasurementUpdate, admin: AdminUser, db: DbSession):
+    """Промяна на мястото, зоната и периода на записано измерване. Нормите се вземат от
+    зоната; администраторът може да ги промени и поотделно."""
+    m = _get_own(db, admin, measurement_id)
     values = data.model_dump(exclude_unset=True)
-    zone = norms.ZONES_BY_CODE.get(values.get("zone_code") or "")
-    if zone:
-        for period in norms.PERIODS:
-            values.setdefault(f"norm_{period}", getattr(zone, period))
+    if "zone_code" in values:
+        norms.apply_zone(db, m, values.pop("zone_code"))
     for key, value in values.items():
-        setattr(m, key, value.strip() or None if isinstance(value, str) else value)
+        setattr(m, key, (value.strip() or None) if isinstance(value, str) else value)
     db.commit()
     return m
 
@@ -73,7 +67,7 @@ def history_xlsx(
     frm, to = resolve_period(period_from, period_to)
     measurements = db.scalars(
         select(Measurement)
-        .where(Measurement.user_id == user.id, Measurement.started_at < to)
+        .where(visible_measurements(user), Measurement.started_at < to)
         .where(func.coalesce(Measurement.ended_at, Measurement.started_at) >= frm)
         .order_by(Measurement.started_at)
     ).all()
@@ -121,9 +115,6 @@ def _equipment(db, measurements) -> list[str]:
             if date:
                 cal_dt = datetime.fromisoformat(date.rstrip("Z"))
                 text += f", калибриран на {norms.to_local(cal_dt):%d.%m.%Y}"
-            if d.get("calibration_valid_until"):
-                until = datetime.fromisoformat(d["calibration_valid_until"].rstrip("Z"))
-                text += f", валидна до {norms.to_local(until):%d.%m.%Y}"
             lines.append(text)
         cal_id = d.get("calibration_id")
         if cal_id and cal_id not in seen_cals:
@@ -140,8 +131,17 @@ def _equipment(db, measurements) -> list[str]:
                     if c.reference_freq_hz:
                         text += f" при {c.reference_freq_hz:g} Hz"
                 lines.append(text)
-    lines.append("Софтуер: NoiseMeter - честотни филтри A, C, Z и времеви F, S, I по IEC 61672-1 и ANSI S1.4")
+    # Стандартът на шумомера - същият, по който са изчислени измерванията.
+    used = _measurement_standards(db, measurements)
+    lines.append(f"Софтуер: METRAVA - честотни филтри A, C, Z и времеви F, S, I по {', '.join(used)}")
     return lines
+
+
+def _measurement_standards(db, measurements) -> list[str]:
+    """Стандартите, по които са изчислени измерванията (в реда на първата поява).
+    За стари записи без стандарт се използва стандартът по подразбиране."""
+    default = db.scalar(select(Standard.name).where(Standard.is_default.is_(True))) or "IEC 61672-1"
+    return list(dict.fromkeys(m.standard_name or default for m in measurements))
 
 
 def _next_number(db, user_id: int, year: int) -> str:
@@ -161,7 +161,7 @@ def create_certificate(data: CertificateIn, user: CurrentUser, db: DbSession):
 
     rows = []
     for i, m in enumerate(measurements, 1):
-        per_period = norms.period_levels(_frames(db, m.id))
+        per_period = norms.period_levels(_frames(db, m.id), m.period)
         values = {}
         for period, p in per_period.items():
             norm = norms.norm_for(m, period)
@@ -171,15 +171,25 @@ def create_certificate(data: CertificateIn, user: CurrentUser, db: DbSession):
         time = f"{start:%d.%m.%Y %H:%M}-{end:%H:%M}" if start.date() == end.date() \
             else f"{start:%d.%m.%Y %H:%M} - {end:%d.%m.%Y %H:%M}"
         rows.append({
-            "no": i, "measurement_id": m.id, "point": m.location or f"т. {i}",
+            "no": i, "measurement_id": m.id, "point": norms.place_label(m) or f"т. {i}",
             "source": m.source, "time": time, "values": values,
         })
 
     normative = data.normative
     if not normative:
-        zone_codes = sorted({m.zone_code for m in measurements if m.zone_code in norms.ZONES_BY_CODE}, key=int)
-        normative = ["Наредба № 6/2006 за показателите за шум в околната среда (ДВ бр. 58/2006), "
-                     "Приложение 2, табл. 2" + (f", т. {', '.join(zone_codes)}" if zone_codes else "")]
+        zones = db.scalars(select(Zone).where(Zone.code.in_({m.zone_code for m in measurements if m.zone_code}))).all()
+        outdoor = sorted((z.code for z in zones if z.category == "outdoor"), key=lambda c: (len(c), c))
+        normative = ["Наредба № 6/2006 за показателите за шум в околната среда (ДВ бр. 58/2006), Приложение 2"
+                     + (f", табл. 2, т. {', '.join(outdoor)}" if outdoor else "")]
+        normative += [f"Наредба № 6/2006 - {z.name}" for z in zones if z.category == "indoor"]
+
+    # Автоматични забележки за измервания извън работната лента на микрофона.
+    out_of_band = [r["point"] for r, m in zip(rows, measurements) if m.out_of_band]
+    remarks = data.remarks or ""
+    if out_of_band:
+        note = ("Измервателният интервал в " + ", ".join(out_of_band)
+                + " излиза извън работната лента на микрофона - резултатите са ориентировъчни.")
+        remarks = f"{remarks}\n{note}".strip()
 
     org = get_or_create_settings(db, user)
     now = datetime.now(norms.local_tz())
@@ -193,7 +203,7 @@ def create_certificate(data: CertificateIn, user: CurrentUser, db: DbSession):
         "normative": normative,
         "rows": rows,
         "conclusion": cert_pdf.conclusion(rows),
-        "remarks": data.remarks,
+        "remarks": remarks or None,
         "equipment": _equipment(db, measurements),
         "performed_by": data.performed_by or [
             " ".join(x for x in (user.first_name, user.last_name) if x) or user.username
@@ -207,14 +217,15 @@ def create_certificate(data: CertificateIn, user: CurrentUser, db: DbSession):
 
 @router.get("/api/certificates", response_model=list[CertificateOut])
 def list_certificates(user: CurrentUser, db: DbSession):
-    return db.scalars(
-        select(Certificate).where(Certificate.user_id == user.id).order_by(Certificate.issued_at.desc())
-    ).all()
+    query = select(Certificate).order_by(Certificate.issued_at.desc())
+    if not user.is_admin:
+        query = query.where(Certificate.user_id == user.id)
+    return db.scalars(query).all()
 
 
 @router.get("/api/certificates/{certificate_id}/pdf")
 def certificate_pdf(certificate_id: int, user: CurrentUser, db: DbSession):
     cert = db.get(Certificate, certificate_id)
-    if cert is None or cert.user_id != user.id:
+    if cert is None or (cert.user_id != user.id and not user.is_admin):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сертификатът не е намерен")
     return _attachment(cert_pdf.render_pdf(cert.data), "application/pdf", f"certificate_{cert.number}.pdf")

@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../l10n/l10n.dart';
+
 class ApiException implements Exception {
   ApiException(this.message, [this.statusCode]);
 
@@ -34,8 +36,18 @@ class ApiClient {
 
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
+        // Сървърът връща съобщенията за грешки на избрания език.
+        'Accept-Language': AppLanguage.current,
         if (token != null) 'Authorization': 'Bearer $token',
       };
+
+  /// Заглавните части за заявки извън този клас (напр. аудио плейъра).
+  Map<String, String> get authHeaders => {
+        'Accept-Language': AppLanguage.current,
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
+
+  Uri url(String path) => _uri(path);
 
   /// [query] може да съдържа и списъци, напр. {'codes': ['LAF', 'LAS']}.
   Future<dynamic> get(String path, {Map<String, dynamic>? query}) =>
@@ -56,7 +68,7 @@ class ApiClient {
   Future<(List<int>, String?)> download(String path) async {
     final res = await _request(() => http.get(_uri(path), headers: _headers), const Duration(minutes: 5));
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw ApiException(_errorMessage(_tryJson(res)) ?? 'Грешка ${res.statusCode}', res.statusCode);
+      throw ApiException(_errorMessage(_tryJson(res)) ?? tr('Грешка {p0}', {'p0': res.statusCode}), res.statusCode);
     }
     final disposition = res.headers['content-disposition'] ?? '';
     final name = RegExp(r'filename="?([^";]+)"?').firstMatch(disposition)?.group(1);
@@ -73,9 +85,9 @@ class ApiClient {
     try {
       return await request().timeout(timeout);
     } on FormatException {
-      throw ApiException('Невалиден адрес на сървъра');
+      throw ApiException(tr('Невалиден адрес на сървъра'));
     } catch (_) {
-      throw ApiException('Няма връзка със сървъра ($baseUrl)');
+      throw ApiException(tr('Няма връзка със сървъра ({p0})', {'p0': baseUrl}));
     }
   }
 
@@ -83,7 +95,7 @@ class ApiClient {
     final res = await _request(request, timeout);
     final body = _tryJson(res);
     if (res.statusCode >= 200 && res.statusCode < 300) return body;
-    throw ApiException(_errorMessage(body) ?? 'Грешка ${res.statusCode}', res.statusCode);
+    throw ApiException(_errorMessage(body) ?? tr('Грешка {p0}', {'p0': res.statusCode}), res.statusCode);
   }
 
   static dynamic _tryJson(http.Response res) {

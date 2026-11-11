@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/measurement_service.dart';
+import '../theme/app_theme.dart';
 
 /// Една линия в графика: точки (x, ниво в dB) и цвят.
 class ChartLine {
@@ -56,13 +57,13 @@ class LevelLineChart extends StatelessWidget {
             ],
           ),
         ),
-        gridData: const FlGridData(drawVerticalLine: false),
+        gridData: _grid,
         borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(
           topTitles: const AxisTitles(),
           rightTitles: const AxisTitles(),
           leftTitles: AxisTitles(
-            axisNameWidget: const Text('dB', style: TextStyle(fontSize: 11)),
+            axisNameWidget: Text('dB', style: _axisStyle),
             sideTitles: SideTitles(showTitles: true, reservedSize: 36, interval: 10, getTitlesWidget: dbAxisLabel),
           ),
           bottomTitles: AxisTitles(
@@ -73,7 +74,7 @@ class LevelLineChart extends StatelessWidget {
               getTitlesWidget: (v, meta) {
                 // Крайните етикети често се застъпват със съседните - пропускаме ги.
                 if (v == meta.min || v == meta.max) return const SizedBox.shrink();
-                return SideTitleWidget(meta: meta, child: Text(xLabel(v), style: const TextStyle(fontSize: 10)));
+                return SideTitleWidget(meta: meta, child: Text(xLabel(v), style: _axisStyle));
               },
             ),
           ),
@@ -83,8 +84,9 @@ class LevelLineChart extends StatelessWidget {
             LineChartBarData(
               spots: [for (final (x, y) in l.points) FlSpot(x, y)],
               color: l.color,
-              barWidth: l.dashed ? 1 : 2,
+              barWidth: l.dashed ? 1 : 1.6,
               dashArray: l.dashed ? [4, 3] : null,
+              belowBarData: BarAreaData(show: !l.dashed, color: l.color.withValues(alpha: 0.08)),
               // При малко точки (напр. кратки записи) линията почти не се вижда - показваме и точките.
               dotData: FlDotData(show: l.points.length <= 30),
             ),
@@ -95,7 +97,15 @@ class LevelLineChart extends StatelessWidget {
 }
 
 Widget dbAxisLabel(double v, TitleMeta meta) =>
-    SideTitleWidget(meta: meta, child: Text(v.toInt().toString(), style: const TextStyle(fontSize: 10)));
+    SideTitleWidget(meta: meta, child: Text(v.toInt().toString(), style: _axisStyle));
+
+final _axisStyle = monoStyle(10, color: AppColors.textSecondary);
+
+/// Хоризонтална мрежа с тънки линии.
+final _grid = FlGridData(
+  drawVerticalLine: false,
+  getDrawingHorizontalLine: (_) => const FlLine(color: AppColors.line, strokeWidth: 1),
+);
 
 /// Графика на живо за последните [MeasurementService.historySeconds] секунди.
 class LevelHistoryChart extends StatelessWidget {
@@ -144,13 +154,13 @@ class BandChart extends StatelessWidget {
         minY: 0,
         maxY: math.max(maxY, 40),
         alignment: BarChartAlignment.spaceAround,
-        gridData: const FlGridData(drawVerticalLine: false),
+        gridData: _grid,
         borderData: FlBorderData(show: false),
         barTouchData: BarTouchData(
           touchTooltipData: BarTouchTooltipData(
             getTooltipItem: (group, _, rod, _) => BarTooltipItem(
               '${_freqLabel(spectrum.centers[group.x])} Hz\n${rod.toY.toStringAsFixed(1)} dB',
-              const TextStyle(color: Colors.white, fontSize: 12),
+              monoStyle(11, color: AppColors.ink),
             ),
           ),
         ),
@@ -161,14 +171,14 @@ class BandChart extends StatelessWidget {
             sideTitles: SideTitles(showTitles: true, reservedSize: 36, interval: 20, getTitlesWidget: dbAxisLabel),
           ),
           bottomTitles: AxisTitles(
-            axisNameWidget: const Text('Hz', style: TextStyle(fontSize: 11)),
+            axisNameWidget: Text('Hz', style: _axisStyle),
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 22,
               getTitlesWidget: (v, meta) {
                 final i = v.toInt();
                 if (i % labelStep != 0 || i >= spectrum.centers.length) return const SizedBox.shrink();
-                return SideTitleWidget(meta: meta, child: Text(_freqLabel(spectrum.centers[i]), style: const TextStyle(fontSize: 9)));
+                return SideTitleWidget(meta: meta, child: Text(_freqLabel(spectrum.centers[i]), style: monoStyle(9, color: AppColors.textSecondary)));
               },
             ),
           ),
@@ -180,7 +190,7 @@ class BandChart extends StatelessWidget {
                 toY: math.max(levels[i], 0),
                 color: color,
                 width: spectrum.mode == '1/3' ? 6 : 16,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+                borderRadius: BorderRadius.zero,
               ),
             ]),
         ],

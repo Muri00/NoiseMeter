@@ -1,5 +1,14 @@
+import '../l10n/l10n.dart';
+
 class User {
-  User({required this.id, required this.username, required this.email, this.firstName, this.lastName});
+  User({
+    required this.id,
+    required this.username,
+    required this.email,
+    this.firstName,
+    this.lastName,
+    this.isAdmin = false,
+  });
 
   factory User.fromJson(Map<String, dynamic> j) => User(
         id: j['id'],
@@ -7,6 +16,7 @@ class User {
         email: j['email'],
         firstName: j['first_name'],
         lastName: j['last_name'],
+        isAdmin: j['is_admin'] == true,
       );
 
   final int id;
@@ -14,6 +24,9 @@ class User {
   final String email;
   final String? firstName;
   final String? lastName;
+
+  /// Администраторът вижда историята на всички, редактира и трие записи и управлява нормите.
+  final bool isAdmin;
 
   String get displayName {
     final full = [firstName, lastName].whereType<String>().where((s) => s.isNotEmpty).join(' ');
@@ -71,10 +84,10 @@ class Device {
   String get title => '$brand $model';
 
   String get calibrationStatusName => switch (calibrationStatus) {
-        'valid' => 'калибриран',
-        'due_soon' => 'калибровката изтича',
-        'expired' => 'калибровката е изтекла',
-        _ => 'некалибриран',
+        'valid' => tr('калибриран'),
+        'due_soon' => tr('калибровката изтича'),
+        'expired' => tr('калибровката е изтекла'),
+        _ => tr('некалибриран'),
       };
 
   Map<String, dynamic> toJson() => {
@@ -119,8 +132,46 @@ const int minIndicators = 5;
 
 final _indicatorPattern = RegExp(r'^L([ACZ])(F|S|I|eq)(max|min)?$');
 
+/// Ниво без честотен и без времеви филтър и неговите max/min.
+const unweightedIndicators = ['Lp', 'Lpmax', 'Lpmin'];
+
+/// Описание на показателя с думи, например LAFmax -> "Максимално ниво, филтър A, бързо (F)".
+String indicatorDescription(String code) {
+  switch (code) {
+    case 'Lp':
+      return tr('Звуково налягане без филтри');
+    case 'Lpmax':
+      return tr('Максимално звуково налягане без филтри');
+    case 'Lpmin':
+      return tr('Минимално звуково налягане без филтри');
+  }
+  final m = _indicatorPattern.firstMatch(code);
+  if (m == null) return '';
+  final kind = switch (m[3]) {
+    'max' => tr('Максимално ниво'),
+    'min' => tr('Минимално ниво'),
+    _ => m[2] == 'eq' ? tr('Еквивалентно ниво') : tr('Текущо ниво'),
+  };
+  final frequency = m[1] == 'Z' ? tr('без честотен филтър (Z)') : tr('филтър {fw}', {'fw': m[1]});
+  final time = switch (m[2]) {
+    'F' => tr('бързо (F)'),
+    'S' => tr('бавно (S)'),
+    'I' => tr('импулсно (I)'),
+    _ => null,
+  };
+  return [kind, frequency, ?time].join(', ');
+}
+
 /// LAFmax -> LA,F,max (запис по IEC 61672-1).
 String indicatorName(String code) {
+  switch (code) {
+    case 'Lp':
+      return 'Lp';
+    case 'Lpmax':
+      return 'Lp,max';
+    case 'Lpmin':
+      return 'Lp,min';
+  }
   final m = _indicatorPattern.firstMatch(code);
   if (m == null) return code;
   return ['L${m[1]}', m[2]!, if (m[3] != null) m[3]!].join(',');
@@ -155,13 +206,26 @@ class Measurement {
         summary = _levels(j['summary']),
         hasWav = j['has_wav'],
         location = j['location'],
+        placeType = j['place_type'],
+        pointNo = j['point_no'],
+        pointCount = j['point_count'],
+        seriesId = j['series_id'],
         source = j['source'],
         zoneCode = j['zone_code'],
         normDay = _d(j['norm_day']),
         normEvening = _d(j['norm_evening']),
         normNight = _d(j['norm_night']),
+        period = j['period'],
+        standardName = j['standard_name'],
+        outOfBand = j['out_of_band'] == true,
+        ownerUsername = j['owner_username'],
         frameCount = j['frame_count'],
-        averageBands = j['average_bands'] == null ? null : BandsData.fromJson(j['average_bands']);
+        averageBands = j['average_bands'] == null ? null : BandsData.fromJson(j['average_bands']),
+        seriesPoints = [
+          for (final p in (j['series_points'] as List? ?? const []))
+            (id: p['id'] as int, pointNo: p['point_no'] as int?, laeq: _d(p['laeq'])),
+        ],
+        seriesLaeq = _d(j['series_laeq']);
 
   final int id;
   final String? name;
@@ -177,17 +241,42 @@ class Measurement {
   final bool hasWav;
   // Място и норми (за отчетите и сертификатите)
   final String? location;
+
+  /// "indoor" - закрито помещение, "outdoor" - открито място (фонов шум).
+  final String? placeType;
+
+  /// Точка от серия в едно помещение: № на точката и брой точки (избира се на място).
+  final int? pointNo;
+  final int? pointCount;
+  final String? seriesId;
   final String? source;
   final String? zoneCode;
   final double? normDay;
   final double? normEvening;
   final double? normNight;
+
+  /// "day", "evening", "night" или null - по часа на измерването.
+  final String? period;
+  final String? standardName;
+
+  /// Интервалът излиза извън работната лента на микрофона - резултатът е ненадежден.
+  final bool outOfBand;
+  final String? ownerUsername;
   // Само в детайлния изглед:
   final int? frameCount;
   final BandsData? averageBands;
 
+  /// Всички точки от серията и енергийното средно LAeq от тях.
+  final List<({int id, int? pointNo, double? laeq})> seriesPoints;
+  final double? seriesLaeq;
+
+  bool get isSeries => (pointCount ?? 1) > 1 && pointNo != null;
+
+  /// "т. 2/5" за точка от серия, иначе празно.
+  String get pointLabel => isSeries ? tr('т. {p0}/{p1}', {'p0': pointNo, 'p1': pointCount}) : '';
+
   String get deviceTitle => '${deviceInfo['brand']} ${deviceInfo['model']}';
-  String get title => (name == null || name!.isEmpty) ? 'Измерване №$id' : name!;
+  String get title => (name == null || name!.isEmpty) ? tr('Измерване №{p0}', {'p0': id}) : name!;
 }
 
 class BandsData {
@@ -295,40 +384,100 @@ class Calibration {
   final double? pressureKpa;
   final String? notes;
 
-  String get methodName => method == 'auto' ? 'Автоматична' : 'Ръчна';
+  String get methodName => method == 'auto' ? tr('Автоматична') : tr('Ръчна');
 
   String get statusName => switch (status) {
-        'applied' => 'Приложена',
-        'pending' => 'Чака потвърждение',
-        _ => 'Отхвърлена',
+        'applied' => tr('Приложена'),
+        'pending' => tr('Чака потвърждение'),
+        _ => tr('Отхвърлена'),
       };
 }
 
 String formatDuration(double seconds) {
   final d = Duration(milliseconds: (seconds * 1000).round());
   final h = d.inHours, m = d.inMinutes % 60, s = d.inSeconds % 60;
-  if (h > 0) return '$h ч $m мин';
-  if (m > 0) return '$m мин $s с';
-  return '${seconds.toStringAsFixed(1)} с';
+  if (h > 0) return tr('{p0} ч {p1} мин', {'p0': h, 'p1': m});
+  if (m > 0) return tr('{p0} мин {p1} с', {'p0': m, 'p1': s});
+  return tr('{p0} с', {'p0': seconds.toStringAsFixed(1)});
 }
 
 String formatDb(double? v, {int digits = 1}) => v == null ? '–' : '${v.toStringAsFixed(digits)} dB';
 
 /// Зона с гранични стойности по Наредба № 6/2006, Прил. 2, табл. 2.
 class Zone {
-  Zone.fromJson(Map<String, dynamic> j)
-      : code = j['code'],
-        name = j['name'],
-        day = _d(j['day'])!,
-        evening = _d(j['evening'])!,
-        night = _d(j['night'])!;
+  Zone({
+    this.id,
+    required this.code,
+    required this.name,
+    this.category = 'outdoor',
+    this.day,
+    this.evening,
+    this.night,
+    this.sortOrder = 0,
+  });
 
+  Zone.fromJson(Map<String, dynamic> j)
+      : id = j['id'],
+        code = j['code'],
+        name = j['name'],
+        category = j['category'] ?? 'outdoor',
+        day = _d(j['day']),
+        evening = _d(j['evening']),
+        night = _d(j['night']),
+        sortOrder = j['sort_order'] ?? 0;
+
+  final int? id;
   final String code;
   final String name;
-  final double day;
-  final double evening;
-  final double night;
+
+  /// "outdoor" - открити територии, "indoor" - помещения.
+  final String category;
+  final double? day;
+  final double? evening;
+  final double? night;
+  final int sortOrder;
+
+  double? normFor(String period) => switch (period) {
+        'day' => day,
+        'evening' => evening,
+        _ => night,
+      };
+
+  Map<String, dynamic> toJson() => {
+        'code': code,
+        'name': name,
+        'category': category,
+        'day': day,
+        'evening': evening,
+        'night': night,
+        'sort_order': sortOrder,
+      };
 }
+
+/// Стандарт за измерване - от него се вземат коефициентите на филтрите.
+class Standard {
+  Standard.fromJson(Map<String, dynamic> j)
+      : id = j['id'],
+        code = j['code'],
+        name = j['name'],
+        isDefault = j['is_default'] == true,
+        sortOrder = j['sort_order'] ?? 0,
+        params = Map<String, dynamic>.from(j['params']);
+
+  final int id;
+  final String code;
+  final String name;
+  final bool isDefault;
+  final int sortOrder;
+
+  /// poles: [f1, f2, f3, f4] в Hz; fast, slow, impulse_rise, impulse_decay в секунди.
+  final Map<String, dynamic> params;
+
+  List<double> get poles => (params['poles'] as List).map((v) => (v as num).toDouble()).toList();
+}
+
+/// Периодите от денонощието по Наредба № 6.
+const periods = ['day', 'evening', 'night'];
 
 /// Издаден сертификат (изискване 8).
 class CertificateInfo {

@@ -49,16 +49,54 @@ def _user_id(client, headers):
     return client.get("/api/auth/me", headers=headers).json()["id"]
 
 
-def test_update_measurement_zone(client, auth_headers):
+def test_place_and_norms(client, auth_headers, admin_headers):
     headers, token = auth_headers
     device_id = _device(client, headers)
-    mid = _record(client, token, device_id, 1.2, record=True)["measurement_id"]
-    r = client.patch(f"/api/measurements/{mid}", json={"location": "т. 3", "source": "Автомобилен трафик",
-                                                        "zone_code": "3"}, headers=headers).json()
-    assert (r["norm_day"], r["norm_evening"], r["norm_night"]) == (60, 55, 50)
-    r = client.patch(f"/api/measurements/{mid}", json={"zone_code": "custom", "norm_night": 47}, headers=headers).json()
-    assert r["norm_night"] == 47 and r["norm_day"] == 60 and r["location"] == "т. 3"
-    assert len(client.get("/api/norms/zones").json()) >= 6
+    # Мястото, зоната и периодът се задават при самото измерване.
+    mid = _record(client, token, device_id, 1.2, record=True, location="т. 3", source="Автомобилен трафик",
+                  zone_code="3", period="night")["measurement_id"]
+    m = client.get(f"/api/measurements/{mid}", headers=headers).json()
+    assert (m["norm_day"], m["norm_evening"], m["norm_night"], m["period"]) == (60, 55, 50, "night")
+    assert m["location"] == "т. 3" and m["standard_code"] == "IEC61672-1:2013" and m["out_of_band"] is False
+
+    # Обикновеният потребител не може да ги променя след това, администраторът - може.
+    assert client.patch(f"/api/measurements/{mid}", json={"zone_code": "1"}, headers=headers).status_code == 403
+    r = client.patch(f"/api/measurements/{mid}", json={"zone_code": "1", "period": "day"}, headers=admin_headers).json()
+    assert (r["norm_day"], r["norm_night"], r["period"]) == (55, 45, "day")
+    r = client.patch(f"/api/measurements/{mid}", json={"norm_night": 47}, headers=admin_headers).json()
+    assert r["norm_night"] == 47 and r["norm_day"] == 55 and r["location"] == "т. 3"
+    assert len(client.get("/api/norms/zones", headers=headers).json()) >= 8
+
+
+def test_zone_admin(client, auth_headers, admin_headers):
+    headers, _ = auth_headers
+    zone = {"code": "П9", "name": "Тестово помещение", "category": "indoor", "day": 35, "evening": 35, "night": 30}
+    assert client.post("/api/admin/zones", json=zone, headers=headers).status_code == 403
+    r = client.post("/api/admin/zones", json=zone, headers=admin_headers)
+    assert r.status_code == 201
+    zid = r.json()["id"]
+    assert client.post("/api/admin/zones", json=zone, headers=admin_headers).status_code == 409
+    r = client.put(f"/api/admin/zones/{zid}", json=zone | {"night": 25}, headers=admin_headers)
+    assert r.json()["night"] == 25
+    assert client.delete(f"/api/admin/zones/{zid}", headers=admin_headers).status_code == 204
+
+
+def test_standards(client, auth_headers, admin_headers):
+    headers, token = auth_headers
+    standards = client.get("/api/standards", headers=headers).json()
+    codes = [s["code"] for s in standards]
+    assert "IEC61672-1:2013" in codes and "ANSI-S1.4-1983" in codes
+    assert sum(s["is_default"] for s in standards) == 1
+
+    ansi = next(s for s in standards if s["code"] == "ANSI-S1.4-1983")
+    assert client.put(f"/api/admin/standards/{ansi['id']}", json=ansi, headers=headers).status_code == 403
+    bad = ansi | {"params": ansi["params"] | {"poles": [12200, 737.9, 107.7, 20.6]}}
+    assert client.put(f"/api/admin/standards/{ansi['id']}", json=bad, headers=admin_headers).status_code == 422
+
+    device_id = _device(client, headers)
+    mid = _record(client, token, device_id, 1.2, record=True, standard_code="ANSI-S1.4-1983")["measurement_id"]
+    m = client.get(f"/api/measurements/{mid}", headers=headers).json()
+    assert m["standard_name"].startswith("ANSI") and "Lpmax" in m["summary"] and "Lp" in m["summary"]
 
 
 def test_excel_and_certificate(client, auth_headers):
@@ -98,7 +136,7 @@ def test_excel_and_certificate(client, auth_headers):
     client.put("/api/settings/organization", json={
         "org_name": "Лаборатория за акустика", "org_address": "гр. София", "org_accreditation": "Рег. № 1",
     }, headers=headers)
-    r = client.post("/api/certificates", json={"measurement_ids": [mid], "remarks": "Тест"}, headers=headers)
+    r = client.post("/api/certificates", json={"measurement_ids": [mid], "title": "Обект", "remarks": "Тест"}, headers=headers)
     assert r.status_code == 201, r.text
     cert = r.json()
     assert cert["number"].endswith("-0001")
@@ -107,11 +145,72 @@ def test_excel_and_certificate(client, auth_headers):
     assert "превишение" in cert["data"]["conclusion"]
     assert "т. 3" in cert["data"]["normative"][0]
     assert any("2182175" in e for e in cert["data"]["equipment"])
+    # Методите по подразбиране са стандартите за метода (ISO 1996), а стандартът на шумомера,
+    # по който е изчислено измерването, е в техническите средства (стар запис - по подразбиране).
+    assert cert["data"]["methods"] == ["БДС ISO 1996-1:2016", "БДС ISO 1996-2:2018"]
+    assert any("БДС EN IEC 61672-1:2013" in e for e in cert["data"]["equipment"])
 
     pdf = client.get(f"/api/certificates/{cert['id']}/pdf", headers=headers)
     assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF"
 
-    second = client.post("/api/certificates", json={"measurement_ids": [mid]}, headers=headers).json()
+    # Въведените методи се използват както са въведени.
+    second = client.post("/api/certificates", json={
+        "measurement_ids": [mid], "title": "Обект", "methods": ["БДС EN ISO 16032:2005"],
+    }, headers=headers).json()
+    assert second["data"]["methods"] == ["БДС EN ISO 16032:2005"]
     assert second["number"].endswith("-0002")
     assert [c["number"] for c in client.get("/api/certificates", headers=headers).json()] == [
         second["number"], cert["number"]]
+
+
+def test_selected_period(client, auth_headers):
+    """При избран период цялото измерване се отнася към него, независимо от часа."""
+    headers, _ = auth_headers
+    device_id = _device(client, headers)
+    uid = _user_id(client, headers)
+    start = datetime.now(UTC).replace(tzinfo=None, microsecond=0) - timedelta(hours=1)
+    with SessionLocal() as db:
+        mid = _fake_measurement(db, uid, device_id, start, [52, 52])
+        m = db.get(Measurement, mid)
+        m.period = "night"
+        m.out_of_band = True
+        db.commit()
+    wb = load_workbook(io.BytesIO(client.get(f"/api/measurements/{mid}/xlsx", headers=headers).content))
+    rows = [r for r in wb["Измервания"].iter_rows(min_row=4, values_only=True) if r[0]]
+    assert len(rows) == 1 and rows[0][6] == "Нощ" and rows[0][8] == 50 and rows[0][9] == "Не"
+    cert = client.post("/api/certificates", json={"measurement_ids": [mid], "title": "Обект"}, headers=headers).json()
+    assert list(cert["data"]["rows"][0]["values"]) == ["night"]
+    assert "извън работната лента" in cert["data"]["remarks"]
+
+
+def test_indoor_zones_seeded(client, auth_headers):
+    headers, _ = auth_headers
+    zones = {z["code"]: z for z in client.get("/api/norms/zones", headers=headers).json()}
+    # Наредба № 6, Приложение 2, табл. 1: жилищни стаи 35 / 35 / 30 dB(A).
+    assert zones["П2"]["category"] == "indoor"
+    assert (zones["П2"]["day"], zones["П2"]["evening"], zones["П2"]["night"]) == (35, 35, 30)
+
+
+def test_points_in_room(client, auth_headers):
+    """Серия от точки в едно закрито помещение: броят на точките се избира на място."""
+    headers, token = auth_headers
+    device_id = _device(client, headers)
+    place = {"record": True, "location": "Зала 2", "place_type": "indoor", "zone_code": "П4",
+             "point_count": 3, "series_id": "test-series-1"}
+    ids = [_record(client, token, device_id, 1.2, point_no=k, **place)["measurement_id"] for k in (1, 2, 3)]
+
+    m = client.get(f"/api/measurements/{ids[1]}", headers=headers).json()
+    assert (m["place_type"], m["point_no"], m["point_count"]) == ("indoor", 2, 3)
+    assert [p["point_no"] for p in m["series_points"]] == [1, 2, 3]
+    laeqs = [p["laeq"] for p in m["series_points"]]
+    assert m["series_laeq"] == norms.energy_mean(laeqs)
+
+    with SessionLocal() as db:
+        assert norms.place_label(db.get(Measurement, ids[2])) == "Зала 2, т. 3"
+
+    # Точка с номер, по-голям от броя на точките, се отказва.
+    with client.websocket_connect("/ws/measure") as ws:
+        ws.send_json({"action": "auth", "token": token})
+        ws.receive_json()
+        ws.send_json({"action": "start", "device_id": device_id, **place, "point_no": 4})
+        assert ws.receive_json()["type"] == "error"

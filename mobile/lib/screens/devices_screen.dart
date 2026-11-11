@@ -7,9 +7,18 @@ import '../services/user_data.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ui.dart';
 import 'device_form_screen.dart';
+import '../l10n/l10n.dart';
 
 class DevicesScreen extends StatelessWidget {
   const DevicesScreen({super.key});
+
+  /// Ширини на колоните: икона, работна лента, чувствителност.
+  static const _iconWidth = 40.0;
+  static const _rangeWidth = 96.0;
+  static const _sensWidth = 72.0;
+
+  /// Число без излишно ".0" (напр. -18 вместо -18.0).
+  static String _num(double v) => v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
   @override
   Widget build(BuildContext context) {
@@ -19,28 +28,52 @@ class DevicesScreen extends StatelessWidget {
     final List<Widget> children;
     if (data.loading && data.devices.isEmpty) {
       children = [const Padding(padding: EdgeInsets.all(48), child: Center(child: CircularProgressIndicator()))];
-    } else if (data.error != null || data.devices.isEmpty) {
+    } else if (data.error != null && data.devices.isEmpty) {
+      // Грешка при зареждане и нищо за показване.
+      children = [InfoBanner(message: data.error!, color: theme.colorScheme.error, icon: Icons.error_outline)];
+    } else if (data.devices.isEmpty) {
       children = [
-        SectionCard(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Column(
-              children: [
-                const IconBadge(icon: Icons.mic_none_rounded, size: 72),
-                const SizedBox(height: 16),
-                Text(
-                  data.error ?? 'Нямате добавени устройства.\nДобавете микрофона, с който ще измервате.',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyLarge,
-                ),
-              ],
-            ),
-          ),
+        EmptyState(
+          icon: Icons.mic_none_rounded,
+          title: tr('Няма устройства'),
+          message: tr('Добавете микрофона, с който ще измервате.'),
         ),
       ];
     } else {
       children = [
-        for (final d in data.devices) ...[_buildDeviceCard(context, d), const SizedBox(height: 12)],
+        if (data.error != null) ...[
+          InfoBanner(message: data.error!, color: theme.colorScheme.error, icon: Icons.error_outline),
+          const SizedBox(height: 24),
+        ],
+        _columnHeaders(context),
+        Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppTheme.radius),
+            border: Border.all(color: AppColors.line),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final (i, d) in data.devices.indexed) ...[
+                  if (i > 0) const Divider(),
+                  _deviceRow(context, d),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text(
+            tr('Задръжте ред за изтриване.'),
+            style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textTertiary),
+          ),
+        ),
         const SizedBox(height: 72), // място за плаващия бутон
       ];
     }
@@ -49,65 +82,100 @@ class DevicesScreen extends StatelessWidget {
       body: RefreshIndicator(
         onRefresh: data.load,
         child: BandedListView(
-          header: const BandTitle(subtitle: 'Измервателни микрофони и срокът на тяхната калибровка'),
+          header: const BandTitle(),
           children: children,
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: FloatingActionButton(
+        tooltip: tr('Ново устройство'),
         onPressed: () => _openForm(context, null),
-        icon: const Icon(Icons.add),
-        label: const Text('Устройство'),
+        child: const Icon(Icons.add),
       ),
     );
   }
 
-  Widget _buildDeviceCard(BuildContext context, Device d) {
+  /// Малки сиви заглавия на колоните над таблицата.
+  Widget _columnHeaders(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textSecondary);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+      child: Row(
+        children: [
+          Expanded(child: Text(tr('Устройство'), style: style)),
+          SizedBox(width: _rangeWidth, child: Text(tr('Работна лента'), style: style)),
+          SizedBox(
+            width: _sensWidth,
+            child: Text(
+              tr('Чувствителност'),
+              style: style,
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Ред за едно устройство: микрофон, марка и модел със серийния номер, работна лента и чувствителност.
+  /// Натискане - редакция; задържане - изтриване.
+  Widget _deviceRow(BuildContext context, Device d) {
     final theme = Theme.of(context);
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => _openForm(context, d),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 4, 14),
-          child: Row(
-            children: [
-              const IconBadge(icon: Icons.mic_rounded, size: 48),
-              const SizedBox(width: 14),
-              Expanded(
+    final secondary = theme.textTheme.bodySmall?.copyWith(color: AppColors.textSecondary);
+    return InkWell(
+      onTap: () => _openForm(context, d),
+      onLongPress: () => _confirmDelete(context, d),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: _iconWidth,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Icon(Icons.mic, color: AppColors.ink, size: 28),
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    d.title,
+                    style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(d.serialNumber, style: secondary, maxLines: 1, overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+            SizedBox(
+              width: _rangeWidth,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(d.title, style: theme.textTheme.titleMedium),
-                    Text(
-                      'S/N ${d.serialNumber}',
-                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        StatusPill(label: '${d.sensitivityDbfs} dBFS', color: theme.colorScheme.primary),
-                        StatusPill(
-                          label: '${formatHz(d.freqMinHz)} – ${formatHz(d.freqMaxHz)}',
-                          color: theme.colorScheme.secondary,
-                        ),
-                        StatusPill(
-                          label: d.calibrationStatusName,
-                          color: AppColors.forCalibration(d.calibrationStatus),
-                        ),
-                      ],
-                    ),
+                    Text('${formatHz(d.freqMinHz)} –', style: monoStyle(13, color: AppColors.ink)),
+                    Text(formatHz(d.freqMaxHz), style: monoStyle(13, color: AppColors.ink)),
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Изтрий',
-                icon: const Icon(Icons.delete_outline_rounded),
-                onPressed: () => _confirmDelete(context, d),
+            ),
+            SizedBox(
+              width: _sensWidth,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(_num(d.sensitivityDbfs), style: monoStyle(16, weight: FontWeight.w500, color: AppColors.ink)),
+                  Text('dBFS', style: secondary),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -126,11 +194,11 @@ class DevicesScreen extends StatelessWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Изтриване на устройство'),
-        content: Text('Да се изтрие ли ${d.title} (S/N ${d.serialNumber})?'),
+        title: Text(tr('Изтриване на устройство')),
+        content: Text(tr('Да се изтрие ли {p0} (S/N {p1})?', {'p0': d.title, 'p1': d.serialNumber})),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отказ')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Изтрий')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Отказ'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Изтрий'))),
         ],
       ),
     );

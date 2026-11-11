@@ -11,6 +11,8 @@ class UserData extends ChangeNotifier {
 
   List<Device> devices = [];
   MeterSettings? settings;
+  List<Zone> zones = [];
+  List<Standard> standards = [];
   bool loading = false;
   String? error;
 
@@ -19,9 +21,16 @@ class UserData extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final results = await Future.wait([api.get('/api/devices'), api.get('/api/settings')]);
+      final results = await Future.wait([
+        api.get('/api/devices'),
+        api.get('/api/settings'),
+        api.get('/api/norms/zones'),
+        api.get('/api/standards'),
+      ]);
       devices = (results[0] as List).map((j) => Device.fromJson(j)).toList();
       settings = MeterSettings.fromJson(results[1]);
+      zones = (results[2] as List).map((j) => Zone.fromJson(j)).toList();
+      standards = (results[3] as List).map((j) => Standard.fromJson(j)).toList();
     } on ApiException catch (e) {
       error = e.message;
     } finally {
@@ -29,6 +38,17 @@ class UserData extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  Future<void> reloadZonesAndStandards() async {
+    final results = await Future.wait([api.get('/api/norms/zones'), api.get('/api/standards')]);
+    zones = (results[0] as List).map((j) => Zone.fromJson(j)).toList();
+    standards = (results[1] as List).map((j) => Standard.fromJson(j)).toList();
+    notifyListeners();
+  }
+
+  Standard? get defaultStandard => standards.where((s) => s.isDefault).firstOrNull ?? standards.firstOrNull;
+
+  Zone? zoneByCode(String? code) => zones.where((z) => z.code == code).firstOrNull;
 
   Future<void> saveDevice(Device device) async {
     final json = device.id == null

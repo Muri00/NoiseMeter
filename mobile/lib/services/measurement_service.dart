@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/models.dart';
+import '../l10n/l10n.dart';
 import 'api_client.dart';
 
 enum MeasurementStatus { idle, connecting, running, error }
@@ -24,6 +25,12 @@ class MeasurementService extends ChangeNotifier {
   Map<String, double> levels = {};
   BandsData? bands;
   double? effectiveFMax;
+
+  /// Интервалът излиза извън работната лента на микрофона - измерването е ненадеждно.
+  bool outOfBand = false;
+
+  /// Стандартът, по който се изчисляват филтрите в текущото измерване.
+  String? standardName;
 
   /// id на записа в базата, ако текущото измерване се записва.
   int? recordingId;
@@ -47,6 +54,15 @@ class MeasurementService extends ChangeNotifier {
     bool record = false,
     bool saveWav = false,
     String? name,
+    String? location,
+    String? placeType,
+    int? pointNo,
+    int? pointCount,
+    String? seriesId,
+    String? source,
+    String? zoneCode,
+    String? period,
+    String? standardCode,
   }) async {
     await _close();
     status = MeasurementStatus.connecting;
@@ -56,6 +72,8 @@ class MeasurementService extends ChangeNotifier {
     bands = null;
     recordingId = null;
     lastSavedId = null;
+    outOfBand = false;
+    standardName = null;
     history.clear();
     notifyListeners();
 
@@ -63,9 +81,9 @@ class MeasurementService extends ChangeNotifier {
       final channel = WebSocketChannel.connect(api.wsUri('/ws/measure'));
       await channel.ready.timeout(const Duration(seconds: 10));
       _channel = channel;
-      _sub = channel.stream.listen(_onMessage, onError: (_) => _fail('Връзката със сървъра прекъсна'), onDone: _onDone);
+      _sub = channel.stream.listen(_onMessage, onError: (_) => _fail(tr('Връзката със сървъра прекъсна')), onDone: _onDone);
       // Токенът се праща в първото съобщение, за да не попада в логовете на сървъра.
-      channel.sink.add(jsonEncode({'action': 'auth', 'token': api.token ?? ''}));
+      channel.sink.add(jsonEncode({'action': 'auth', 'token': api.token ?? '', 'lang': AppLanguage.current}));
       channel.sink.add(jsonEncode({
         'action': 'start',
         'device_id': deviceId,
@@ -75,9 +93,18 @@ class MeasurementService extends ChangeNotifier {
         'record': record,
         'save_wav': record && saveWav,
         if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+        if (record && location != null && location.trim().isNotEmpty) 'location': location.trim(),
+        if (record && placeType != null) 'place_type': placeType,
+        if (record && pointNo != null) 'point_no': pointNo,
+        if (record && pointCount != null) 'point_count': pointCount,
+        if (record && seriesId != null) 'series_id': seriesId,
+        if (record && source != null && source.trim().isNotEmpty) 'source': source.trim(),
+        if (record && zoneCode != null) 'zone_code': zoneCode,
+        if (record && period != null) 'period': period,
+        'standard_code': ?standardCode,
       }));
     } catch (_) {
-      _fail('Няма връзка със сървъра (${api.baseUrl})');
+      _fail(tr('Няма връзка със сървъра ({p0})', {'p0': api.baseUrl}));
     }
   }
 
@@ -94,6 +121,8 @@ class MeasurementService extends ChangeNotifier {
         status = MeasurementStatus.running;
         effectiveFMax = (msg['f_max'] as num).toDouble();
         recordingId = msg['measurement_id'] as int?;
+        outOfBand = msg['out_of_band'] == true;
+        standardName = msg['standard'] as String?;
       case 'frame':
         _applyFrame(msg);
       case 'stopped':
@@ -127,7 +156,7 @@ class MeasurementService extends ChangeNotifier {
   void _onDone() {
     if (status == MeasurementStatus.running || status == MeasurementStatus.connecting) {
       final code = _channel?.closeCode;
-      _fail(code == 4401 ? 'Сесията е изтекла - влезте отново' : 'Връзката със сървъра прекъсна');
+      _fail(code == 4401 ? tr('Сесията е изтекла - влезте отново') : tr('Връзката със сървъра прекъсна'));
     }
   }
 

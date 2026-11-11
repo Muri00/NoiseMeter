@@ -13,6 +13,7 @@ ABS_F_MIN_HZ = 3.0
 ABS_F_MAX_HZ = 80_000.0
 
 BandMode = Literal["off", "1/1", "1/3"]
+PlaceType = Literal["indoor", "outdoor"]  # закрито помещение / открито място
 
 
 # ---------- Общи ----------
@@ -80,6 +81,7 @@ class UserOut(BaseModel):
     email: str
     first_name: str | None
     last_name: str | None
+    is_admin: bool = False
 
 
 class TokenOut(BaseModel):
@@ -176,11 +178,20 @@ class MeasurementOut(BaseModel):
     summary: dict | None
     has_wav: bool
     location: str | None = None
+    place_type: PlaceType | None = None
+    point_no: int | None = None
+    point_count: int | None = None
+    series_id: str | None = None
     source: str | None = None
     zone_code: str | None = None
     norm_day: float | None = None
     norm_evening: float | None = None
     norm_night: float | None = None
+    period: str | None = None
+    standard_code: str | None = None
+    standard_name: str | None = None
+    out_of_band: bool | None = None
+    owner_username: str | None = None
 
 
 class BandsOut(BaseModel):
@@ -189,9 +200,18 @@ class BandsOut(BaseModel):
     levels: list[float]
 
 
+class SeriesPointOut(BaseModel):
+    id: int
+    point_no: int | None
+    laeq: float | None
+
+
 class MeasurementDetailOut(MeasurementOut):
     frame_count: int
     average_bands: BandsOut | None
+    # Всички точки от серията в същото помещение и енергийното средно LAeq от тях.
+    series_points: list[SeriesPointOut] = []
+    series_laeq: float | None = None
 
 
 class SeriesOut(BaseModel):
@@ -284,25 +304,77 @@ class CalibrationOut(CalibrationMeta):
 
 # ---------- Отчети и сертификати ----------
 
+Period = Literal["day", "evening", "night"]
+
+
 class MeasurementUpdate(BaseModel):
-    """Място, източник и норми на измерването. Ако е избрана зона от Наредба 6
-    и нормите не са подадени, те се попълват от таблицата."""
+    """Място, източник, зона и период на измерването (редактира се само от администратор).
+    Нормите се вземат от зоната; администраторът може и да ги промени поотделно."""
 
     name: str | None = Field(default=None, max_length=200)
     location: str | None = Field(default=None, max_length=200)
+    place_type: PlaceType | None = None
     source: str | None = Field(default=None, max_length=200)
     zone_code: str | None = Field(default=None, max_length=20)
+    period: Period | None = None
     norm_day: float | None = Field(default=None, ge=20, le=120)
     norm_evening: float | None = Field(default=None, ge=20, le=120)
     norm_night: float | None = Field(default=None, ge=20, le=120)
 
 
-class ZoneOut(BaseModel):
-    code: str
-    name: str
-    day: float
-    evening: float
-    night: float
+class ZoneIn(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=300)
+    category: Literal["outdoor", "indoor"] = "outdoor"
+    day: float | None = Field(default=None, ge=10, le=120)
+    evening: float | None = Field(default=None, ge=10, le=120)
+    night: float | None = Field(default=None, ge=10, le=120)
+    sort_order: int = 0
+
+
+class ZoneOut(ZoneIn):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+
+
+class StandardParams(BaseModel):
+    """Коефициенти на филтрите: полюсни честоти f1..f4 (Hz) и времеви константи (s)."""
+
+    poles: list[float] = Field(min_length=4, max_length=4)
+    fast: float = Field(gt=0, le=10)
+    slow: float = Field(gt=0, le=10)
+    impulse_rise: float = Field(gt=0, le=10)
+    impulse_decay: float = Field(gt=0, le=10)
+
+    @field_validator("poles")
+    @classmethod
+    def poles_positive(cls, v: list[float]) -> list[float]:
+        if any(p <= 0 for p in v) or v != sorted(v):
+            raise ValueError("Полюсните честоти трябва да са положителни и във възходящ ред")
+        return v
+
+
+class StandardIn(BaseModel):
+    code: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=200)
+    params: StandardParams
+    is_default: bool = False
+    sort_order: int = 0
+
+
+class StandardOut(StandardIn):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+
+
+class AdminUserOut(UserOut):
+    role: str | None
+
+
+class RoleUpdate(BaseModel):
+    role: Literal["user", "admin"]
 
 
 class OrganizationSettings(BaseModel):
@@ -313,12 +385,17 @@ class OrganizationSettings(BaseModel):
     org_accreditation: str | None = Field(default=None, max_length=2000)
 
 
+
+
+# Методи за определяне на нивата на шума - за открити места и за помещения.
 DEFAULT_METHODS = ["БДС ISO 1996-1:2016", "БДС ISO 1996-2:2018"]
 
 
 class CertificateIn(BaseModel):
     measurement_ids: list[int] = Field(min_length=1, max_length=50)
-    title: str | None = Field(default=None, max_length=300)
+    title: str = Field(min_length=1, max_length=300)
+    # Стандарти за метода на измерване (как се измерва). Стандартът на шумомера (IEC 61672-1)
+    # не е метод - той се вписва автоматично в "Технически средства".
     methods: list[Annotated[str, Field(max_length=300)]] = Field(default_factory=lambda: list(DEFAULT_METHODS))
     # Празно = автоматично от зоните на измерванията.
     normative: list[Annotated[str, Field(max_length=300)]] | None = None

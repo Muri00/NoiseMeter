@@ -90,8 +90,19 @@ def test_websocket_measurement(client, auth_headers):
         ws.send_json({"action": "auth", "token": token})
         assert ws.receive_json()["type"] == "auth_ok"
 
-        # Интервал извън работната лента на устройството.
+        # Интервал извън работната лента на устройството се допуска, но се отбелязва като ненадежден.
         ws.send_json({"action": "start", "device_id": device_id, "f_min": 10, "f_max": 20000})
+        started = ws.receive_json()
+        assert started["type"] == "started" and started["out_of_band"] is True
+        assert started["device_band"] == [20, 20000] and "61672" in started["standard"]
+        ws.send_json({"action": "stop"})
+        msg = ws.receive_json()
+        while msg["type"] == "frame":
+            msg = ws.receive_json()
+        assert msg["type"] == "stopped"
+
+        # Извън абсолютните граници 3 Hz - 80 kHz е грешка.
+        ws.send_json({"action": "start", "device_id": device_id, "f_min": 1, "f_max": 20000})
         assert ws.receive_json()["type"] == "error"
 
         ws.send_json({"action": "start", "device_id": device_id, "band_mode": "1/1"})

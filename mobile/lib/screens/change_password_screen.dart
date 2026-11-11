@@ -5,6 +5,7 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../widgets/ui.dart';
 import 'register_screen.dart' show validatePassword;
+import '../l10n/l10n.dart';
 
 /// Смяна на паролата. Връща true при успех.
 class ChangePasswordScreen extends StatefulWidget {
@@ -52,72 +53,53 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const gap = SizedBox(height: 12);
+    const gap = SizedBox(height: 16);
     final toggle = IconButton(
-      icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
-      tooltip: _obscure ? 'Покажи паролите' : 'Скрий паролите',
+      icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+      tooltip: _obscure ? tr('Покажи паролите') : tr('Скрий паролите'),
       onPressed: () => setState(() => _obscure = !_obscure),
     );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Смяна на паролата')),
+      appBar: AppBar(title: Text(tr('Смяна на паролата'))),
       body: Form(
         key: _form,
-        child: ListView(
-          padding: const EdgeInsets.all(24),
+        child: BandedListView(
           children: [
-            const InfoBanner(
-              message:
-                  'След смяната ще излезете от акаунта на всички други устройства. '
-                  'На това устройство оставате влезли.',
-              icon: Icons.devices_other_rounded,
-            ),
-            const SizedBox(height: 16),
-            SectionCard(
-              title: 'Нова парола',
-              icon: Icons.lock_reset_rounded,
-              child: Column(
-                children: [
-                  TextFormField(
-                    controller: _current,
-                    obscureText: _obscure,
-                    autofillHints: const [AutofillHints.password],
-                    decoration: InputDecoration(
-                      labelText: 'Текуща парола',
-                      prefixIcon: const Icon(Icons.lock_outline_rounded),
-                      suffixIcon: toggle,
-                    ),
-                    validator: (v) => (v == null || v.isEmpty)
-                        ? 'Въведете текущата парола'
-                        : null,
-                  ),
-                  gap,
-                  TextFormField(
-                    controller: _new,
-                    obscureText: _obscure,
-                    autofillHints: const [AutofillHints.newPassword],
-                    decoration: const InputDecoration(
-                      labelText: 'Нова парола',
-                      prefixIcon: Icon(Icons.key_outlined),
-                      helperText:
-                          'Поне 8 символа, с поне една буква и една цифра',
-                    ),
-                    validator: validatePassword,
-                  ),
-                  gap,
-                  TextFormField(
-                    controller: _confirm,
-                    obscureText: _obscure,
-                    decoration: const InputDecoration(
-                      labelText: 'Повторете новата парола',
-                      prefixIcon: Icon(Icons.key_outlined),
-                    ),
-                    validator: (v) =>
-                        v != _new.text ? 'Паролите не съвпадат' : null,
-                    onFieldSubmitted: (_) => _submit(),
-                  ),
-                ],
+            TextFormField(
+              controller: _current,
+              obscureText: _obscure,
+              autofillHints: const [AutofillHints.password],
+              decoration: InputDecoration(
+                labelText: tr('Текуща парола'),
+                suffixIcon: toggle,
               ),
+              validator: (v) => (v == null || v.isEmpty)
+                  ? tr('Въведете текущата парола')
+                  : null,
+            ),
+            gap,
+            TextFormField(
+              controller: _new,
+              obscureText: _obscure,
+              autofillHints: const [AutofillHints.newPassword],
+              decoration: InputDecoration(
+                labelText: tr('Нова парола'),
+                helperText:
+                    tr('Поне 8 символа, с поне една буква и една цифра'),
+              ),
+              validator: validatePassword,
+            ),
+            gap,
+            TextFormField(
+              controller: _confirm,
+              obscureText: _obscure,
+              decoration: InputDecoration(
+                labelText: tr('Повторете новата парола'),
+              ),
+              validator: (v) =>
+                  v != _new.text ? tr('Паролите не съвпадат') : null,
+              onFieldSubmitted: (_) => _submit(),
             ),
             if (_error != null) ...[
               gap,
@@ -136,7 +118,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                       width: 20,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Text('Смени паролата'),
+                  : Text(tr('Смени паролата')),
             ),
           ],
         ),
